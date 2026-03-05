@@ -1,12 +1,21 @@
 // @ts-nocheck
 /**
  * Discord.js v14 - 편제(조직표) 관리 봇 (Node.js)
- * - organization.json에 편제 + 공지메시지ID/채널ID까지 영구 저장
+ * 반영사항:
+ * 1) 권한 레벨 역할 ID 변경
+ * 2) 특정 사용자(SUPER_USER_ID)에게 모든 명령어 권한 부여
+ * 3) /편제추가 시 부서에 따라 대상자 역할 자동 제거/추가
+ * 4) organization.json에 편제 + 공지메시지ID/채널ID 영구 저장
  *
  * 필요:
- * 1) npm i discord.js
- * 2) TOKEN 환경변수 설정
- * 3) Bot Privileged Gateway Intents: Server Members Intent ON (멤버/역할 조회에 필요)
+ * - npm i discord.js
+ * - TOKEN, CLIENT_ID, GUILD_ID 환경변수 설정
+ * - Developer Portal > Bot > Privileged Gateway Intents:
+ *   ✅ Server Members Intent ON
+ * - 봇 서버 권한:
+ *   ✅ Manage Roles (역할관리)
+ * - 역할 계층:
+ *   봇 역할이 변경 대상 역할들보다 위에 있어야 함
  */
 
 const fs = require("fs");
@@ -18,43 +27,44 @@ const {
   REST,
   Routes,
   EmbedBuilder,
-  PermissionsBitField,
 } = require("discord.js");
 
 // =========================
 // 기본 설정
 // =========================
 const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID; // Discord Application ID
+const GUILD_ID = process.env.GUILD_ID;   // 서버 ID
 
-// ✅ 여기에 봇의 Application ID(=Client ID) 넣어야 슬래시 등록됩니다.
-const CLIENT_ID = process.env.CLIENT_ID; // 권장: 환경변수로
-const GUILD_ID = process.env.GUILD_ID;   // 권장: 환경변수로 (한 서버 전용이면)
+// ✅ 특정 사용자 풀권한(모든 명령어 가능)
+const SUPER_USER_ID = "942558158436589640";
 
 // 파일 경로
 const DATA_FILE = path.join(__dirname, "organization.json");
 
 // =========================
-// 권한 레벨 설정 (파이썬 코드 동일)
+// 권한 레벨 설정 (요청 반영)
 // =========================
 const LEVEL_ROLES = {
-  1: [1479076820988072019], // 레벨1 역할 ID (대령)
-  2: [1479078397517758604], // 레벨2 역할 ID (사령본부)
-  3: [1479078442367451207], // 레벨3 역할 ID (사령관 본인)
+  1: ["1440692062465953884"], // 레벨1 역할 ID (대령)
+  2: ["1432003250810388610"], // 레벨2 역할 ID (사령본부)
+  3: ["1432002835264045147"], // 레벨3 역할 ID (사령관 본인)
 };
 
 function getUserLevel(member) {
-  if (!member?.roles?.cache) return 0;
-  const roleIds = new Set(member.roles.cache.map((r) => r.id));
+  if (!member) return 0;
 
-  const levels = Object.keys(LEVEL_ROLES)
-    .map((x) => parseInt(x, 10))
-    .sort((a, b) => b - a); // 3 -> 2 -> 1
+  // ✅ 특정 유저는 무조건 최고 권한
+  if (String(member.id) === SUPER_USER_ID) return 999;
+
+  if (!member?.roles?.cache) return 0;
+
+  const userRoles = member.roles.cache.map((r) => r.id);
+  const levels = Object.keys(LEVEL_ROLES).map(Number).sort((a, b) => b - a); // 3->2->1
 
   for (const level of levels) {
-    const ids = LEVEL_ROLES[level] || [];
-    if (ids.some((id) => roleIds.has(String(id)))) return level;
-    if (ids.some((id) => roleIds.has(id))) return level;
-    // 위 2줄은 id 타입 혼용 방지
+    const roles = LEVEL_ROLES[level] || [];
+    if (roles.some((rid) => userRoles.includes(String(rid)))) return level;
   }
   return 0;
 }
@@ -134,12 +144,10 @@ function loadData() {
     const raw = fs.readFileSync(DATA_FILE, "utf-8");
     const parsed = JSON.parse(raw);
 
-    // 구버전/부분 누락 대비
     const base = defaultData();
     if (!parsed.편제) parsed.편제 = base.편제;
     if (!parsed.공지) parsed.공지 = base.공지;
 
-    // 키 누락 보정
     for (const k of Object.keys(base.편제)) {
       if (!Array.isArray(parsed.편제[k])) parsed.편제[k] = [];
     }
@@ -173,16 +181,17 @@ function buildEmbeds(guild, highlightUserId = null) {
   const hqLines = [];
   for (const pos of HQ_POSITIONS) {
     const emoji = HQ_EMOJIS[pos] || "";
-    const slot = 편제["사령본부"].find((m) => m.position === pos);
+    const slot = (편제["사령본부"] || []).find((m) => m.position === pos);
 
     if (slot) {
       const mem = guild.members.cache.get(String(slot.id));
       if (mem) {
         const starred = highlightUserId && String(mem.id) === String(highlightUserId);
-        const line = starred
-          ? `${emoji} | ${pos} : **${mem} / ${slot.nickname} ⭐**`
-          : `${emoji} | ${pos} : ${mem} / ${slot.nickname}`;
-        hqLines.push(line);
+        hqLines.push(
+          starred
+            ? `${emoji} | ${pos} : **${mem} / ${slot.nickname} ⭐**`
+            : `${emoji} | ${pos} : ${mem} / ${slot.nickname}`
+        );
       } else {
         hqLines.push(`${emoji} | ${pos} : 공석`);
       }
@@ -244,12 +253,8 @@ const commands = [
           { name: "인사교육단 (소령)", value: "인사교육단_소령" }
         )
     )
-    .addUserOption((opt) =>
-      opt.setName("대상").setDescription("추가할 멤버").setRequired(true)
-    )
-    .addStringOption((opt) =>
-      opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
-    ),
+    .addUserOption((opt) => opt.setName("대상").setDescription("추가할 멤버").setRequired(true))
+    .addStringOption((opt) => opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("사령본부추가")
@@ -259,19 +264,13 @@ const commands = [
       for (const p of HQ_POSITIONS) opt.addChoices({ name: p, value: p });
       return opt;
     })
-    .addUserOption((opt) =>
-      opt.setName("대상").setDescription("배치할 멤버").setRequired(true)
-    )
-    .addStringOption((opt) =>
-      opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
-    ),
+    .addUserOption((opt) => opt.setName("대상").setDescription("배치할 멤버").setRequired(true))
+    .addStringOption((opt) => opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("편제삭제")
     .setDescription("등록된 인원을 모든 편제에서 제거합니다.")
-    .addUserOption((opt) =>
-      opt.setName("대상").setDescription("삭제할 멤버").setRequired(true)
-    ),
+    .addUserOption((opt) => opt.setName("대상").setDescription("삭제할 멤버").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("편제현황")
@@ -280,19 +279,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName("찾기")
     .setDescription("멘션한 인원이 어느 편제에 있는지 확인합니다.")
-    .addUserOption((opt) =>
-      opt.setName("대상").setDescription("찾을 멤버").setRequired(true)
-    ),
+    .addUserOption((opt) => opt.setName("대상").setDescription("찾을 멤버").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("공지")
     .setDescription("현재 편제현황을 지정 채널에 공지로 등록합니다.")
-    .addChannelOption((opt) =>
-      opt
-        .setName("채널")
-        .setDescription("공지 올릴 채널")
-        .setRequired(true)
-    ),
+    .addChannelOption((opt) => opt.setName("채널").setDescription("공지 올릴 채널").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("공지수정")
@@ -305,9 +297,7 @@ async function registerCommands() {
   if (!GUILD_ID) throw new Error("GUILD_ID 환경변수가 없습니다.");
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
-    body: commands,
-  });
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
   console.log("✅ 슬래시 명령어 등록 완료");
 }
 
@@ -315,21 +305,16 @@ async function registerCommands() {
 // 클라이언트 생성
 // =========================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // 멤버/역할 조회 필수
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 client.once("ready", async () => {
   console.log(`✅ 로그인 완료: ${client.user.tag}`);
 
-  // 캐시(멤버) 확보: 서버 규모 크면 비용 큼, 필요한 경우만.
-  // 그래도 편제현황에서 get_member 역할을 하려면 캐시가 있으면 유리합니다.
   const guild = client.guilds.cache.get(GUILD_ID);
   if (guild) {
     try {
-      await guild.members.fetch(); // 전체 멤버 fetch
+      await guild.members.fetch();
       console.log("✅ 길드 멤버 캐시 로드 완료");
     } catch (e) {
       console.warn("⚠️ 멤버 fetch 실패(권한/규모/레이트리밋):", e?.message || e);
@@ -348,7 +333,6 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.reply({ content: "길드에서만 사용 가능합니다.", ephemeral: true });
   }
 
-  // 멤버 객체 확보
   const me = await guild.members.fetch(interaction.user.id).catch(() => null);
   const userLevel = getUserLevel(me);
 
@@ -365,8 +349,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({ content: "❌ 권한이 없습니다.", ephemeral: true });
       }
 
-      // 레벨1은 소령(인사교육단_소령)만 가능 (파이썬 코드 동일)
-      if (userLevel === 1 && dept !== "인사교육단_소령") {
+      // 레벨1(대령)은 소령만 가능 (단, SUPER_USER는 예외)
+      if (userLevel === 1 && userLevel !== 999 && dept !== "인사교육단_소령") {
         return interaction.reply({
           content: "❌ 소령 편제는 대령 이상만 추가 가능합니다.",
           ephemeral: true,
@@ -377,12 +361,60 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({ content: "❌ 잘못된 부서입니다.", ephemeral: true });
       }
 
-      // 정원 체크
       if ((store.편제[dept] || []).length >= LIMITS[dept]) {
         return interaction.reply({ content: "❌ 최대 인원 초과", ephemeral: true });
       }
 
-      // 모든 교육단에서 제거(중복 방지)
+      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember) {
+        return interaction.reply({ content: "❌ 대상 멤버를 찾을 수 없습니다.", ephemeral: true });
+      }
+
+      // ===== 부서별 역할 자동 변경 =====
+      // 인사교육단(소령)
+      if (dept === "인사교육단_소령") {
+        const removeRoleId = "1432005822237380659";
+        const addRoleIds = ["1432005794135802007", "1443933530135461908", "1434909470106058842"];
+
+        try {
+          if (targetMember.roles.cache.has(removeRoleId)) {
+            await targetMember.roles.remove(removeRoleId);
+          }
+          const toAdd = addRoleIds.filter((rid) => !targetMember.roles.cache.has(rid));
+          if (toAdd.length) await targetMember.roles.add(toAdd);
+        } catch (e) {
+          console.error("역할 변경 실패(소령):", e);
+          return interaction.reply({
+            content:
+              "❌ 역할 변경에 실패했습니다. (봇 권한/역할 계층 확인 필요: Manage Roles + 봇 역할이 대상 역할보다 위)",
+            ephemeral: true,
+          });
+        }
+      }
+
+      // 재정교육단
+      if (dept === "재정교육단") {
+        const removeRoleId = "1018195906807480402";
+        const addRoleId = "1018469270084132864";
+
+        try {
+          if (targetMember.roles.cache.has(removeRoleId)) {
+            await targetMember.roles.remove(removeRoleId);
+          }
+          if (!targetMember.roles.cache.has(addRoleId)) {
+            await targetMember.roles.add(addRoleId);
+          }
+        } catch (e) {
+          console.error("역할 변경 실패(재정):", e);
+          return interaction.reply({
+            content:
+              "❌ 역할 변경에 실패했습니다. (봇 권한/역할 계층 확인 필요: Manage Roles + 봇 역할이 대상 역할보다 위)",
+            ephemeral: true,
+          });
+        }
+      }
+
+      // ===== 기존 중복 방지(교육단 1곳만 유지) =====
       for (const d of Object.keys(LIMITS)) {
         store.편제[d] = (store.편제[d] || []).filter((m) => String(m.id) !== String(targetUser.id));
       }
@@ -401,14 +433,13 @@ client.on("interactionCreate", async (interaction) => {
       const targetUser = interaction.options.getUser("대상", true);
       const nickname = interaction.options.getString("닉네임", true);
 
-      if (userLevel < 3) {
+      if (userLevel < 3 && userLevel !== 999) {
         return interaction.reply({
           content: "❌ 훈련부장 이상부터 사령본부 수정이 가능합니다.",
           ephemeral: true,
         });
       }
 
-      // 같은 직책 기존 배치 제거 + 대상이 다른 직책이면 그것도 제거
       store.편제["사령본부"] = (store.편제["사령본부"] || []).filter(
         (m) => m.position !== position && String(m.id) !== String(targetUser.id)
       );
@@ -428,7 +459,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "편제삭제") {
       const targetUser = interaction.options.getUser("대상", true);
 
-      if (userLevel < 2) {
+      if (userLevel < 2 && userLevel !== 999) {
         return interaction.reply({
           content: "❌ 사령본부 이상만 사용 가능합니다.",
           ephemeral: true,
@@ -452,15 +483,9 @@ client.on("interactionCreate", async (interaction) => {
       saveData(store);
 
       if (removed) {
-        return interaction.reply({
-          content: `${targetUser} 편제에서 삭제 완료`,
-          ephemeral: true,
-        });
+        return interaction.reply({ content: `${targetUser} 편제에서 삭제 완료`, ephemeral: true });
       }
-      return interaction.reply({
-        content: "해당 인원은 등록되어 있지 않습니다.",
-        ephemeral: true,
-      });
+      return interaction.reply({ content: "해당 인원은 등록되어 있지 않습니다.", ephemeral: true });
     }
 
     // -------------------------
@@ -478,7 +503,6 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "찾기") {
       const targetUser = interaction.options.getUser("대상", true);
 
-      // 대상이 편제에 있는지 여부 판단
       const inHQ = (store.편제["사령본부"] || []).some((m) => String(m.id) === String(targetUser.id));
       const inDept = Object.keys(LIMITS).some((dept) =>
         (store.편제[dept] || []).some((m) => String(m.id) === String(targetUser.id))
@@ -498,14 +522,10 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "공지") {
       const channel = interaction.options.getChannel("채널", true);
 
-      if (userLevel < 2) {
-        return interaction.reply({
-          content: "❌ 사령본부 이상만 공지가 가능합니다.",
-          ephemeral: true,
-        });
+      if (userLevel < 2 && userLevel !== 999) {
+        return interaction.reply({ content: "❌ 사령본부 이상만 공지가 가능합니다.", ephemeral: true });
       }
 
-      // 텍스트 채널만
       if (!channel?.isTextBased?.() || channel.isDMBased?.()) {
         return interaction.reply({ content: "❌ 텍스트 채널만 선택 가능합니다.", ephemeral: true });
       }
@@ -524,11 +544,8 @@ client.on("interactionCreate", async (interaction) => {
     // /공지수정
     // -------------------------
     if (interaction.commandName === "공지수정") {
-      if (userLevel < 3) {
-        return interaction.reply({
-          content: "❌ 사령본부 이상만 공지수정이 가능합니다.",
-          ephemeral: true,
-        });
+      if (userLevel < 3 && userLevel !== 999) {
+        return interaction.reply({ content: "❌ 사령본부 이상만 공지수정이 가능합니다.", ephemeral: true });
       }
 
       const { messageId, channelId } = store.공지 || {};
