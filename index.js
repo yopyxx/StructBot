@@ -1,8 +1,9 @@
-// index.js (Discord.js v14 + Railway keepalive)
+// index.js (Discord.js v14 + Railway keepalive) - NO express
 
 const fs = require("fs");
 const path = require("path");
-const express = require("express");
+const http = require("http");
+
 const {
   Client,
   GatewayIntentBits,
@@ -12,22 +13,25 @@ const {
 } = require("discord.js");
 
 // =========================
-// Railway Keep-Alive (HTTP)
+// Railway Keep-Alive (HTTP) - NO express
 // =========================
-const app = express();
-app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/health", (_, res) => res.status(200).json({ ok: true }));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`[HTTP] Listening on :${PORT}`));
+http
+  .createServer((req, res) => {
+    if (req.url === "/" || req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+    res.writeHead(404);
+    res.end("Not Found");
+  })
+  .listen(PORT, () => console.log(`[HTTP] Listening on :${PORT}`));
 
 // =========================
 // Discord Client
 // =========================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // 역할 부여/제거에 필요
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 // =========================
@@ -39,14 +43,8 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// =========================
-// 1) 특정 사용자에게 모든 권한 부여
-// =========================
 const OWNER_ID = "942558158436589640";
 
-// =========================
-// 역할 자동 업데이트 (요청 2,3)
-// =========================
 const ROLE_UPDATES = {
   major: {
     add: ["1443933530135461908", "1432005794135802007", "1434909470106058842"],
@@ -58,34 +56,18 @@ const ROLE_UPDATES = {
   },
 };
 
-// =========================
-// 편제(예시) 데이터 저장
-// =========================
 const DATA_FILE = path.join(__dirname, "organization.json");
 
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
-    return {
-      // 예시 구조
-      "재정교육단": [],       // (여기서 대령 편제라고 가정)
-      "인사교육단_중령": [],
-      "인사교육단_소령": [], // 소령 편제
-    };
+    return { "재정교육단": [], "인사교육단_중령": [], "인사교육단_소령": [] };
   }
   try {
-    const raw = fs.readFileSync(DATA_FILE, "utf-8");
-    return JSON.parse(raw);
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
   } catch (e) {
     console.error("❌ organization.json 파싱 실패:", e);
-    // 파일 손상 시 백업 후 초기화(안전장치)
-    try {
-      fs.copyFileSync(DATA_FILE, DATA_FILE + ".broken_backup");
-    } catch {}
-    return {
-      "재정교육단": [],
-      "인사교육단_중령": [],
-      "인사교육단_소령": [],
-    };
+    try { fs.copyFileSync(DATA_FILE, DATA_FILE + ".broken_backup"); } catch {}
+    return { "재정교육단": [], "인사교육단_중령": [], "인사교육단_소령": [] };
   }
 }
 
@@ -95,39 +77,25 @@ function saveData(data) {
 
 let org = loadData();
 
-// =========================
-// 권한 체크 (OWNER 우회 포함)
-// =========================
 function isOwner(interaction) {
   return interaction.user?.id === OWNER_ID;
 }
 
-// 예시 권한: 서버 관리자 또는 특정 역할 보유 등으로 확장 가능
 function hasCommandPermission(interaction) {
   if (isOwner(interaction)) return true;
-
-  // 예시: 관리자 권한 가진 사람만
   const member = interaction.member;
   if (!member) return false;
-  // guild member permissions
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
-
   return false;
 }
 
-// =========================
-// 역할 변경 유틸
-// =========================
 async function applyRoleUpdate(guildMember, update) {
   if (!guildMember || !update) return;
 
   const toAdd = (update.add || []).filter(Boolean);
   const toRemove = (update.remove || []).filter(Boolean);
 
-  // 이미 있는 역할/없는 역할은 알아서 무시되지만,
-  // 불필요 API 호출 줄이려면 현 상태 확인해서 거르는 게 좋음
   const currentRoleIds = new Set(guildMember.roles.cache.map((r) => r.id));
-
   const addList = toAdd.filter((id) => !currentRoleIds.has(id));
   const removeList = toRemove.filter((id) => currentRoleIds.has(id));
 
@@ -135,9 +103,6 @@ async function applyRoleUpdate(guildMember, update) {
   if (removeList.length > 0) await guildMember.roles.remove(removeList);
 }
 
-// =========================
-// Slash Commands 등록
-// =========================
 const commands = [
   new SlashCommandBuilder()
     .setName("편제추가")
@@ -167,9 +132,7 @@ const commands = [
 
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-
   try {
-    // 전역 커맨드가 아니라 "현재 guild에서만" 쓰고 싶다면 guildId 기반 등록이 더 빠름
     await client.application.commands.set(commands);
     console.log("✅ 슬래시 커맨드 등록 완료");
   } catch (e) {
@@ -177,15 +140,10 @@ client.once("ready", async () => {
   }
 });
 
-// =========================
-// Interaction Handler
-// =========================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   try {
-    // 1) OWNER는 모든 명령 권한
-    // (명령별로 권한 제한이 있어도 여기서 통과시키면 됨)
     const ownerBypass = isOwner(interaction);
 
     if (interaction.commandName === "편제추가") {
@@ -202,26 +160,19 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({ content: "❌ 길드에서만 사용할 수 있습니다.", ephemeral: true });
       }
 
-      // 대상 멤버 fetch (캐시 누락 대비)
       const targetMember = await guild.members.fetch(user.id);
 
-      // 편제 중복 제거(예시)
       for (const k of Object.keys(org)) {
         org[k] = (org[k] || []).filter((m) => m.id !== user.id);
       }
 
       org[dept] = org[dept] || [];
       org[dept].push({ id: user.id, nickname });
-
       saveData(org);
 
-      // 2) 소령 편제 추가 시 역할 업데이트
       if (dept === "인사교육단_소령") {
         await applyRoleUpdate(targetMember, ROLE_UPDATES.major);
       }
-
-      // 3) 대령 편제 추가 시 역할 업데이트
-      // 여기서는 "재정교육단(대령)"을 대령 편제로 가정했음
       if (dept === "재정교육단") {
         await applyRoleUpdate(targetMember, ROLE_UPDATES.colonel);
       }
@@ -233,7 +184,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "편제현황") {
-      // 현황은 누구나 보게 하려면 권한 체크 생략 가능
       const embed = new EmbedBuilder()
         .setTitle("📋 편제 현황")
         .setDescription(
@@ -258,17 +208,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// =========================
-// Railway 안정성(크래시 로깅)
-// =========================
-process.on("unhandledRejection", (reason) => {
-  console.error("unhandledRejection:", reason);
-});
-process.on("uncaughtException", (err) => {
-  console.error("uncaughtException:", err);
-});
+process.on("unhandledRejection", (reason) => console.error("unhandledRejection:", reason));
+process.on("uncaughtException", (err) => console.error("uncaughtException:", err));
 
-// =========================
-// Login
-// =========================
 client.login(TOKEN);
