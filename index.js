@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Discord.js v14 - 편제(조직표) 관리 봇
+ * Discord.js v14 - 편제(조직표) 관리 봇 최종 완성본
  *
  * 기능
  * - /편제추가
@@ -12,6 +12,15 @@
  * - /공지수정
  * - /해임
  *
+ * 반영 사항
+ * - 권한 레벨 시스템
+ * - 특정 디스코드 ID(942558158436589640) 모든 명령어 사용 가능
+ * - /편제추가 시 부서별 역할 전체 교체
+ * - /해임 시 역할 전체 교체 + 편제 자동 삭제
+ * - /편제현황 Level 1 이상만 가능
+ * - 슬래시 명령어 2개씩 뜨는 문제 방지
+ *   -> 글로벌 명령어 비우고 길드 명령어만 등록
+ *
  * 필수 환경변수
  * - TOKEN
  * - CLIENT_ID
@@ -19,8 +28,8 @@
  *
  * 필수 권한
  * - Bot > Privileged Gateway Intents > Server Members Intent ON
- * - 봇 역할에 Manage Roles 권한 필요
- * - 봇 역할이 부여/제거할 역할들보다 위에 있어야 함
+ * - Manage Roles 권한
+ * - 봇 역할이 부여/제거할 역할보다 위에 있어야 함
  */
 
 const fs = require("fs");
@@ -45,18 +54,31 @@ const GUILD_ID = process.env.GUILD_ID;
 const DATA_FILE = path.join(__dirname, "organization.json");
 
 // =========================
+// 봇 전체 관리자
+// =========================
+const SUPER_ADMIN_IDS = [
+  "942558158436589640",
+];
+
+// =========================
 // 권한 레벨 설정
 // =========================
 const LEVEL_ROLES = {
-  1: [1440692062465953884], // 레벨1 역할 ID (대령)
-  2: [1432003250810388610], // 레벨2 역할 ID (사령본부)
+  1: [1440692062465953884], // 대령
+  2: [1432003250810388610], // 사령본부
   3: [
     1432002835264045147,
     1458110231287435417,
-  ], // 레벨3 역할 ID
+  ], // 사령관
 };
 
 function getUserLevel(member) {
+  if (!member) return 0;
+
+  if (SUPER_ADMIN_IDS.includes(String(member.id))) {
+    return 999;
+  }
+
   if (!member?.roles?.cache) return 0;
 
   const roleIds = new Set(member.roles.cache.map((r) => String(r.id)));
@@ -85,7 +107,7 @@ const DISMISS_ROLES = [
 ];
 
 // =========================
-// 편제추가 시 부서별 자동 부여 역할
+// 부서별 자동 부여 역할
 // =========================
 const DEPT_ASSIGN_ROLES = {
   "인사교육단_소령": [
@@ -245,6 +267,7 @@ function removeUserFromOrganization(targetId) {
 
 async function replaceMemberRoles(member, roleIds, guild) {
   const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
+
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
   }
@@ -271,7 +294,8 @@ function buildEmbeds(guild, highlightUserId = null) {
     if (member) {
       const memObj = guild.members.cache.get(String(member.id));
       if (memObj) {
-        const isTarget = highlightUserId && String(memObj.id) === String(highlightUserId);
+        const isTarget =
+          highlightUserId && String(memObj.id) === String(highlightUserId);
         hqLines.push(
           isTarget
             ? `${emoji} | ${pos} : **${memObj} / ${member.nickname} ⭐**`
@@ -305,7 +329,9 @@ function buildEmbeds(guild, highlightUserId = null) {
       const memObj = guild.members.cache.get(String(m.id));
       if (!memObj) continue;
 
-      const isTarget = highlightUserId && String(memObj.id) === String(highlightUserId);
+      const isTarget =
+        highlightUserId && String(memObj.id) === String(highlightUserId);
+
       membersList.push(
         isTarget
           ? `**${memObj} / ${m.nickname} ⭐**`
@@ -324,6 +350,24 @@ function buildEmbeds(guild, highlightUserId = null) {
   }
 
   return [hqEmbed, otherEmbed];
+}
+
+async function refreshNoticeIfExists(guild) {
+  try {
+    const { messageId, channelId } = store.공지 || {};
+    if (!messageId || !channelId) return;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) return;
+
+    const embeds = buildEmbeds(guild, null);
+    await message.edit({ embeds }).catch(() => null);
+  } catch (err) {
+    console.error("공지 자동 갱신 실패:", err);
+  }
 }
 
 // =========================
@@ -415,12 +459,11 @@ async function registerCommands() {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  // 1) 글로벌 명령어 비우기
-  // 예전에 글로벌로 등록된 명령어 때문에 길드 명령어와 중복 표시되는 문제 방지
+  // 글로벌 명령어 비우기
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
   console.log("✅ 글로벌 슬래시 명령어 정리 완료");
 
-  // 2) 길드 명령어만 등록
+  // 길드 명령어만 등록
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
     body: commands,
   });
@@ -456,6 +499,7 @@ client.once("ready", async () => {
 // =========================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
   if (!interaction.guild) {
     return interaction.reply({
       content: "❌ 길드에서만 사용 가능합니다.",
@@ -483,7 +527,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // 레벨1은 소령만 가능
       if (userLevel === 1 && dept !== "인사교육단_소령") {
         return interaction.reply({
           content: "❌ 대령 권한은 인사교육단(소령)만 추가 가능합니다.",
@@ -518,14 +561,12 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // 기존 교육단 편제에서 제거
       for (const d of Object.keys(LIMITS)) {
         store.편제[d] = store.편제[d].filter(
           (m) => String(m.id) !== String(targetUser.id)
         );
       }
 
-      // 새 부서 등록
       store.편제[dept].push({
         id: targetUser.id,
         nickname,
@@ -533,23 +574,14 @@ client.on("interactionCreate", async (interaction) => {
 
       const rolesToAssign = DEPT_ASSIGN_ROLES[dept] || [];
 
-      try {
-        await replaceMemberRoles(targetMember, rolesToAssign, guild);
-        saveData(store);
+      await replaceMemberRoles(targetMember, rolesToAssign, guild);
+      saveData(store);
+      await refreshNoticeIfExists(guild);
 
-        return interaction.reply({
-          content: `✅ ${targetUser} 님을 ${dept} 편제에 등록했고, 역할을 새로 적용했습니다.`,
-          ephemeral: true,
-        });
-      } catch (err) {
-        console.error("편제추가 역할 변경 오류:", err);
-
-        return interaction.reply({
-          content:
-            "❌ 편제 등록 중 역할 변경에 실패했습니다. 봇 역할 위치와 Manage Roles 권한을 확인해주세요.",
-          ephemeral: true,
-        });
-      }
+      return interaction.reply({
+        content: `✅ ${targetUser} 님을 ${dept} 편제에 등록했고, 역할을 새로 적용했습니다.`,
+        ephemeral: true,
+      });
     }
 
     // =========================
@@ -578,6 +610,7 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       saveData(store);
+      await refreshNoticeIfExists(guild);
 
       return interaction.reply({
         content: `${targetUser} → ${position} 등록 완료`,
@@ -600,6 +633,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const removed = removeUserFromOrganization(targetUser.id);
       saveData(store);
+      await refreshNoticeIfExists(guild);
 
       if (removed) {
         return interaction.reply({
@@ -760,38 +794,33 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      try {
-        const removedFromOrg = removeUserFromOrganization(targetMember.id);
+      const removedFromOrg = removeUserFromOrganization(targetMember.id);
+      await replaceMemberRoles(targetMember, DISMISS_ROLES, guild);
+      saveData(store);
+      await refreshNoticeIfExists(guild);
 
-        await replaceMemberRoles(targetMember, DISMISS_ROLES, guild);
-        saveData(store);
-
-        return interaction.reply({
-          content: removedFromOrg
-            ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)`
-            : `⚠️ ${targetMember} 해임 처리 완료`,
-          ephemeral: false,
-        });
-      } catch (err) {
-        console.error("해임 처리 오류:", err);
-        return interaction.reply({
-          content: "❌ 역할 수정 중 오류 발생",
-          ephemeral: true,
-        });
-      }
+      return interaction.reply({
+        content: removedFromOrg
+          ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)`
+          : `⚠️ ${targetMember} 해임 처리 완료`,
+        ephemeral: false,
+      });
     }
   } catch (err) {
     console.error("명령 처리 중 오류:", err);
 
+    const errorMessage =
+      "❌ 처리 중 오류가 발생했습니다. 봇 역할 위치, Manage Roles 권한, 환경변수를 확인해주세요.";
+
     if (interaction.deferred || interaction.replied) {
       return interaction.followUp({
-        content: "❌ 처리 중 오류가 발생했습니다. 콘솔을 확인해주세요.",
+        content: errorMessage,
         ephemeral: true,
       }).catch(() => {});
     }
 
     return interaction.reply({
-      content: "❌ 처리 중 오류가 발생했습니다. 콘솔을 확인해주세요.",
+      content: errorMessage,
       ephemeral: true,
     }).catch(() => {});
   }
