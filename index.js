@@ -1,22 +1,26 @@
 // @ts-nocheck
 /**
- * Discord.js v14 - 편제(조직표) 관리 봇 (Node.js)
- * 반영사항:
- * 1) 권한 레벨 역할 ID 설정
- * 2) 특정 사용자(SUPER_USER_ID)에게 모든 명령어 권한 부여
- * 3) /편제추가 시 부서에 따라 대상자 역할 자동 제거/추가
- * 4) organization.json에 편제 + 공지메시지ID/채널ID 영구 저장
- * 5) ✅ /편제현황: Level 1 이상만 사용 가능 (userLevel==0 차단)
+ * Discord.js v14 - 편제(조직표) 관리 봇
  *
- * 필요:
- * - npm i discord.js
- * - TOKEN, CLIENT_ID, GUILD_ID 환경변수 설정
- * - Developer Portal > Bot > Privileged Gateway Intents:
- *   ✅ Server Members Intent ON
- * - 봇 서버 권한:
- *   ✅ Manage Roles (역할관리)
- * - 역할 계층:
- *   봇 역할이 변경 대상 역할들보다 위에 있어야 함
+ * 기능
+ * - /편제추가
+ * - /사령본부추가
+ * - /편제삭제
+ * - /편제현황
+ * - /찾기
+ * - /공지
+ * - /공지수정
+ * - /해임
+ *
+ * 필수 환경변수
+ * - TOKEN
+ * - CLIENT_ID
+ * - GUILD_ID
+ *
+ * 필수 권한
+ * - Bot > Privileged Gateway Intents > Server Members Intent ON
+ * - 봇 역할에 Manage Roles 권한 필요
+ * - 봇 역할이 부여/제거할 역할들보다 위에 있어야 함
  */
 
 const fs = require("fs");
@@ -24,54 +28,97 @@ const path = require("path");
 const {
   Client,
   GatewayIntentBits,
-  SlashCommandBuilder,
   REST,
   Routes,
+  SlashCommandBuilder,
   EmbedBuilder,
+  ChannelType,
 } = require("discord.js");
 
 // =========================
 // 기본 설정
 // =========================
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID; // Discord Application ID
-const GUILD_ID = process.env.GUILD_ID;   // 서버 ID
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
-// ✅ 특정 사용자 풀권한(모든 명령어 가능)
-const SUPER_USER_ID = "942558158436589640";
-
-// 파일 경로
 const DATA_FILE = path.join(__dirname, "organization.json");
 
 // =========================
 // 권한 레벨 설정
 // =========================
 const LEVEL_ROLES = {
-  1: ["1440692062465953884"], // Level 1
-  2: ["1432003250810388610"], // Level 2
-  3: ["1432002835264045147"], // Level 3
+  1: [1440692062465953884], // 레벨1 역할 ID (대령)
+  2: [1432003250810388610], // 레벨2 역할 ID (사령본부)
+  3: [
+    1432002835264045147,
+    1458110231287435417,
+  ], // 레벨3 역할 ID
 };
 
 function getUserLevel(member) {
-  if (!member) return 0;
-
-  // ✅ 특정 유저는 무조건 최고 권한
-  if (String(member.id) === SUPER_USER_ID) return 999;
-
   if (!member?.roles?.cache) return 0;
 
-  const userRoles = member.roles.cache.map((r) => r.id);
-  const levels = Object.keys(LEVEL_ROLES).map(Number).sort((a, b) => b - a);
+  const roleIds = new Set(member.roles.cache.map((r) => String(r.id)));
+  const levels = Object.keys(LEVEL_ROLES)
+    .map(Number)
+    .sort((a, b) => b - a);
 
   for (const level of levels) {
-    const roles = LEVEL_ROLES[level] || [];
-    if (roles.some((rid) => userRoles.includes(String(rid)))) return level;
+    const targets = LEVEL_ROLES[level].map(String);
+    if (targets.some((id) => roleIds.has(id))) {
+      return level;
+    }
   }
+
   return 0;
 }
 
 // =========================
-// 사령본부 직책/이모지
+// 해임 후 부여할 역할
+// =========================
+const DISMISS_ROLES = [
+  "1432007526337089546",
+  "1432006421523988664",
+  "1432006106800197665",
+  "1432005822237380659",
+];
+
+// =========================
+// 편제추가 시 부서별 자동 부여 역할
+// =========================
+const DEPT_ASSIGN_ROLES = {
+  "인사교육단_소령": [
+    "1432007526337089546",
+    "1432006421523988664",
+    "1432006106800197665",
+    "1434909470106058842",
+    "1443933530135461908",
+    "1432005794135802007",
+  ],
+
+  "인사교육단_중령": [
+    "1432007526337089546",
+    "1432006421523988664",
+    "1432006106800197665",
+    "1432005794135802007",
+    "1473698641628631153",
+    "1443933530135461908",
+    "1434909470106058842",
+  ],
+
+  "재정교육단": [
+    "1432007526337089546",
+    "1432006421523988664",
+    "1432006106800197665",
+    "1434909470106058842",
+    "1443933530135461908",
+    "1440692062465953884",
+  ],
+};
+
+// =========================
+// 사령본부 직책
 // =========================
 const HQ_POSITIONS = [
   "교육사령관",
@@ -140,41 +187,78 @@ function defaultData() {
 }
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return defaultData();
+  if (!fs.existsSync(DATA_FILE)) {
+    return defaultData();
+  }
+
   try {
-    const raw = fs.readFileSync(DATA_FILE, "utf-8");
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
     const parsed = JSON.parse(raw);
-
     const base = defaultData();
-    if (!parsed.편제) parsed.편제 = base.편제;
-    if (!parsed.공지) parsed.공지 = base.공지;
 
-    for (const k of Object.keys(base.편제)) {
-      if (!Array.isArray(parsed.편제[k])) parsed.편제[k] = [];
+    if (!parsed.편제 || typeof parsed.편제 !== "object") parsed.편제 = base.편제;
+    if (!parsed.공지 || typeof parsed.공지 !== "object") parsed.공지 = base.공지;
+
+    for (const key of Object.keys(base.편제)) {
+      if (!Array.isArray(parsed.편제[key])) {
+        parsed.편제[key] = [];
+      }
     }
+
     if (!("messageId" in parsed.공지)) parsed.공지.messageId = null;
     if (!("channelId" in parsed.공지)) parsed.공지.channelId = null;
 
     return parsed;
-  } catch (e) {
-    console.error("❌ organization.json 파싱 실패:", e);
+  } catch (err) {
+    console.error("organization.json 파싱 실패:", err);
     return defaultData();
   }
 }
 
 function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 4), "utf-8");
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-let store = loadData(); // {편제, 공지}
+let store = loadData();
 
 // =========================
-// 임베드 생성 유틸
+// 유틸
 // =========================
+function removeUserFromOrganization(targetId) {
+  let removed = false;
+  const strId = String(targetId);
+
+  for (const dept of Object.keys(LIMITS)) {
+    const before = store.편제[dept].length;
+    store.편제[dept] = store.편제[dept].filter((m) => String(m.id) !== strId);
+    if (store.편제[dept].length !== before) removed = true;
+  }
+
+  const beforeHQ = store.편제["사령본부"].length;
+  store.편제["사령본부"] = store.편제["사령본부"].filter(
+    (m) => String(m.id) !== strId
+  );
+  if (store.편제["사령본부"].length !== beforeHQ) removed = true;
+
+  return removed;
+}
+
+async function replaceMemberRoles(member, roleIds, guild) {
+  const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
+  if (removableRoles.size > 0) {
+    await member.roles.remove(removableRoles);
+  }
+
+  if (roleIds && roleIds.length > 0) {
+    await member.roles.add(roleIds);
+  }
+}
+
+async function safeFetchMember(guild, userId) {
+  return await guild.members.fetch(userId).catch(() => null);
+}
+
 function buildEmbeds(guild, highlightUserId = null) {
-  const 편제 = store.편제;
-
-  // ===== 사령본부 =====
   const hqEmbed = new EmbedBuilder()
     .setTitle("📋 사령본부 편제 현황")
     .setColor(0x1f3a93);
@@ -182,16 +266,16 @@ function buildEmbeds(guild, highlightUserId = null) {
   const hqLines = [];
   for (const pos of HQ_POSITIONS) {
     const emoji = HQ_EMOJIS[pos] || "";
-    const slot = (편제["사령본부"] || []).find((m) => m.position === pos);
+    const member = store.편제["사령본부"].find((m) => m.position === pos);
 
-    if (slot) {
-      const mem = guild.members.cache.get(String(slot.id));
-      if (mem) {
-        const starred = highlightUserId && String(mem.id) === String(highlightUserId);
+    if (member) {
+      const memObj = guild.members.cache.get(String(member.id));
+      if (memObj) {
+        const isTarget = highlightUserId && String(memObj.id) === String(highlightUserId);
         hqLines.push(
-          starred
-            ? `${emoji} | ${pos} : **${mem} / ${slot.nickname} ⭐**`
-            : `${emoji} | ${pos} : ${mem} / ${slot.nickname}`
+          isTarget
+            ? `${emoji} | ${pos} : **${memObj} / ${member.nickname} ⭐**`
+            : `${emoji} | ${pos} : ${memObj} / ${member.nickname}`
         );
       } else {
         hqLines.push(`${emoji} | ${pos} : 공석`);
@@ -201,9 +285,12 @@ function buildEmbeds(guild, highlightUserId = null) {
     }
   }
 
-  hqEmbed.addFields([{ name: "사령본부", value: hqLines.join("\n"), inline: false }]);
+  hqEmbed.addFields({
+    name: "사령본부",
+    value: hqLines.join("\n") || "없음",
+    inline: false,
+  });
 
-  // ===== 교육단 =====
   const otherEmbed = new EmbedBuilder()
     .setTitle("📋 재정·인사교육단 편제 현황")
     .setColor(0x2ecc71);
@@ -212,32 +299,35 @@ function buildEmbeds(guild, highlightUserId = null) {
 
   for (const dept of deptOrder) {
     const emoji = DEPT_EMOJIS[dept] || "";
-    const list = [];
+    const membersList = [];
 
-    for (const m of (편제[dept] || [])) {
-      const mem = guild.members.cache.get(String(m.id));
-      if (!mem) continue;
+    for (const m of store.편제[dept]) {
+      const memObj = guild.members.cache.get(String(m.id));
+      if (!memObj) continue;
 
-      const starred = highlightUserId && String(mem.id) === String(highlightUserId);
-      list.push(starred ? `**${mem} / ${m.nickname} ⭐**` : `${mem} / ${m.nickname}`);
+      const isTarget = highlightUserId && String(memObj.id) === String(highlightUserId);
+      membersList.push(
+        isTarget
+          ? `**${memObj} / ${m.nickname} ⭐**`
+          : `${memObj} / ${m.nickname}`
+      );
     }
 
-    const current = list.length;
-    const maximum = LIMITS[dept];
-    const displayName = DEPT_DISPLAY_NAME[dept];
-    const rankName = DEPT_RANK[dept];
+    const fieldName = `${emoji} | ${DEPT_DISPLAY_NAME[dept]} (${DEPT_RANK[dept]} : ${membersList.length}/${LIMITS[dept]})`;
+    const fieldValue = membersList.length > 0 ? membersList.join("\n") : "없음";
 
-    const fieldName = `${emoji} | ${displayName} (${rankName} : ${current}/${maximum})`;
-    const fieldValue = list.length ? list.join("\n") : "없음";
-
-    otherEmbed.addFields([{ name: fieldName, value: fieldValue, inline: false }]);
+    otherEmbed.addFields({
+      name: fieldName,
+      value: fieldValue,
+      inline: false,
+    });
   }
 
   return [hqEmbed, otherEmbed];
 }
 
 // =========================
-// 슬래시 명령어 등록
+// 슬래시 명령어 정의
 // =========================
 const commands = [
   new SlashCommandBuilder()
@@ -246,7 +336,7 @@ const commands = [
     .addStringOption((opt) =>
       opt
         .setName("부서")
-        .setDescription("추가할 부서를 선택하세요.")
+        .setDescription("추가할 부서")
         .setRequired(true)
         .addChoices(
           { name: "재정교육단", value: "재정교육단" },
@@ -254,24 +344,36 @@ const commands = [
           { name: "인사교육단 (소령)", value: "인사교육단_소령" }
         )
     )
-    .addUserOption((opt) => opt.setName("대상").setDescription("추가할 멤버").setRequired(true))
-    .addStringOption((opt) => opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)),
+    .addUserOption((opt) =>
+      opt.setName("대상").setDescription("추가할 멤버").setRequired(true)
+    )
+    .addStringOption((opt) =>
+      opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("사령본부추가")
     .setDescription("사령본부 직책에 인원을 배치합니다.")
     .addStringOption((opt) => {
       opt.setName("직책").setDescription("직책 선택").setRequired(true);
-      for (const p of HQ_POSITIONS) opt.addChoices({ name: p, value: p });
+      for (const p of HQ_POSITIONS) {
+        opt.addChoices({ name: p, value: p });
+      }
       return opt;
     })
-    .addUserOption((opt) => opt.setName("대상").setDescription("배치할 멤버").setRequired(true))
-    .addStringOption((opt) => opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)),
+    .addUserOption((opt) =>
+      opt.setName("대상").setDescription("배치할 멤버").setRequired(true)
+    )
+    .addStringOption((opt) =>
+      opt.setName("닉네임").setDescription("표기할 닉네임").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("편제삭제")
     .setDescription("등록된 인원을 모든 편제에서 제거합니다.")
-    .addUserOption((opt) => opt.setName("대상").setDescription("삭제할 멤버").setRequired(true)),
+    .addUserOption((opt) =>
+      opt.setName("대상").setDescription("삭제할 멤버").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("편제현황")
@@ -280,33 +382,59 @@ const commands = [
   new SlashCommandBuilder()
     .setName("찾기")
     .setDescription("멘션한 인원이 어느 편제에 있는지 확인합니다.")
-    .addUserOption((opt) => opt.setName("대상").setDescription("찾을 멤버").setRequired(true)),
+    .addUserOption((opt) =>
+      opt.setName("대상").setDescription("찾을 멤버").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("공지")
     .setDescription("현재 편제현황을 지정 채널에 공지로 등록합니다.")
-    .addChannelOption((opt) => opt.setName("채널").setDescription("공지 올릴 채널").setRequired(true)),
+    .addChannelOption((opt) =>
+      opt.setName("채널").setDescription("공지할 채널").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("공지수정")
     .setDescription("등록된 편제 공지를 최신 정보로 수정합니다."),
-].map((c) => c.toJSON());
 
+  new SlashCommandBuilder()
+    .setName("해임")
+    .setDescription("해당 유저의 모든 역할을 제거하고 기본 역할을 부여합니다.")
+    .addUserOption((opt) =>
+      opt.setName("대상").setDescription("해임할 유저").setRequired(true)
+    ),
+].map((cmd) => cmd.toJSON());
+
+// =========================
+// 슬래시 명령어 등록
+// =========================
 async function registerCommands() {
   if (!TOKEN) throw new Error("TOKEN 환경변수가 없습니다.");
   if (!CLIENT_ID) throw new Error("CLIENT_ID 환경변수가 없습니다.");
   if (!GUILD_ID) throw new Error("GUILD_ID 환경변수가 없습니다.");
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  console.log("✅ 슬래시 명령어 등록 완료");
+
+  // 1) 글로벌 명령어 비우기
+  // 예전에 글로벌로 등록된 명령어 때문에 길드 명령어와 중복 표시되는 문제 방지
+  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+  console.log("✅ 글로벌 슬래시 명령어 정리 완료");
+
+  // 2) 길드 명령어만 등록
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+    body: commands,
+  });
+  console.log("✅ 길드 슬래시 명령어 등록 완료");
 }
 
 // =========================
 // 클라이언트 생성
 // =========================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 
 client.once("ready", async () => {
@@ -317,8 +445,8 @@ client.once("ready", async () => {
     try {
       await guild.members.fetch();
       console.log("✅ 길드 멤버 캐시 로드 완료");
-    } catch (e) {
-      console.warn("⚠️ 멤버 fetch 실패(권한/규모/레이트리밋):", e?.message || e);
+    } catch (err) {
+      console.warn("⚠️ 길드 멤버 전체 fetch 실패:", err?.message || err);
     }
   }
 });
@@ -328,153 +456,173 @@ client.once("ready", async () => {
 // =========================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-
-  const guild = interaction.guild;
-  if (!guild) {
-    return interaction.reply({ content: "길드에서만 사용 가능합니다.", ephemeral: true });
+  if (!interaction.guild) {
+    return interaction.reply({
+      content: "❌ 길드에서만 사용 가능합니다.",
+      ephemeral: true,
+    });
   }
 
-  const me = await guild.members.fetch(interaction.user.id).catch(() => null);
-  const userLevel = getUserLevel(me);
+  const guild = interaction.guild;
+  const executorMember = await safeFetchMember(guild, interaction.user.id);
+  const userLevel = getUserLevel(executorMember);
 
   try {
-    // -------------------------
+    // =========================
     // /편제추가
-    // -------------------------
+    // =========================
     if (interaction.commandName === "편제추가") {
       const dept = interaction.options.getString("부서", true);
       const targetUser = interaction.options.getUser("대상", true);
       const nickname = interaction.options.getString("닉네임", true);
 
       if (userLevel === 0) {
-        return interaction.reply({ content: "❌ 권한이 없습니다.", ephemeral: true });
+        return interaction.reply({
+          content: "❌ 권한이 없습니다.",
+          ephemeral: true,
+        });
       }
 
-      // 레벨1(대령)은 소령만 가능 (단, SUPER_USER는 예외)
-      if (userLevel === 1 && userLevel !== 999 && dept !== "인사교육단_소령") {
+      // 레벨1은 소령만 가능
+      if (userLevel === 1 && dept !== "인사교육단_소령") {
         return interaction.reply({
-          content: "❌ 소령 편제는 대령 이상만 추가 가능합니다.",
+          content: "❌ 대령 권한은 인사교육단(소령)만 추가 가능합니다.",
           ephemeral: true,
         });
       }
 
       if (!LIMITS[dept]) {
-        return interaction.reply({ content: "❌ 잘못된 부서입니다.", ephemeral: true });
+        return interaction.reply({
+          content: "❌ 잘못된 부서입니다.",
+          ephemeral: true,
+        });
       }
 
-      if ((store.편제[dept] || []).length >= LIMITS[dept]) {
-        return interaction.reply({ content: "❌ 최대 인원 초과", ephemeral: true });
-      }
-
-      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      const targetMember = await safeFetchMember(guild, targetUser.id);
       if (!targetMember) {
-        return interaction.reply({ content: "❌ 대상 멤버를 찾을 수 없습니다.", ephemeral: true });
+        return interaction.reply({
+          content: "❌ 대상 멤버를 찾을 수 없습니다.",
+          ephemeral: true,
+        });
       }
 
-      // ===== 부서별 역할 자동 변경 =====
-      if (dept === "인사교육단_소령") {
-        const removeRoleId = "1432005822237380659";
-        const addRoleIds = ["1432005794135802007", "1443933530135461908", "1434909470106058842"];
-        try {
-          if (targetMember.roles.cache.has(removeRoleId)) await targetMember.roles.remove(removeRoleId);
-          const toAdd = addRoleIds.filter((rid) => !targetMember.roles.cache.has(rid));
-          if (toAdd.length) await targetMember.roles.add(toAdd);
-        } catch (e) {
-          console.error("역할 변경 실패(소령):", e);
-          return interaction.reply({
-            content:
-              "❌ 역할 변경에 실패했습니다. (봇 권한/역할 계층 확인 필요: Manage Roles + 봇 역할이 대상 역할보다 위)",
-            ephemeral: true,
-          });
-        }
+      const currentDeptMembers = store.편제[dept] || [];
+      const isAlreadyInSameDept = currentDeptMembers.some(
+        (m) => String(m.id) === String(targetUser.id)
+      );
+
+      if (!isAlreadyInSameDept && currentDeptMembers.length >= LIMITS[dept]) {
+        return interaction.reply({
+          content: "❌ 최대 인원 초과",
+          ephemeral: true,
+        });
       }
 
-      if (dept === "재정교육단") {
-        const removeRoleId = "1018195906807480402";
-        const addRoleId = "1018469270084132864";
-        try {
-          if (targetMember.roles.cache.has(removeRoleId)) await targetMember.roles.remove(removeRoleId);
-          if (!targetMember.roles.cache.has(addRoleId)) await targetMember.roles.add(addRoleId);
-        } catch (e) {
-          console.error("역할 변경 실패(재정):", e);
-          return interaction.reply({
-            content:
-              "❌ 역할 변경에 실패했습니다. (봇 권한/역할 계층 확인 필요: Manage Roles + 봇 역할이 대상 역할보다 위)",
-            ephemeral: true,
-          });
-        }
-      }
-
-      // ===== 기존 중복 방지(교육단 1곳만 유지) =====
+      // 기존 교육단 편제에서 제거
       for (const d of Object.keys(LIMITS)) {
-        store.편제[d] = (store.편제[d] || []).filter((m) => String(m.id) !== String(targetUser.id));
+        store.편제[d] = store.편제[d].filter(
+          (m) => String(m.id) !== String(targetUser.id)
+        );
       }
 
-      store.편제[dept].push({ id: targetUser.id, nickname });
-      saveData(store);
+      // 새 부서 등록
+      store.편제[dept].push({
+        id: targetUser.id,
+        nickname,
+      });
 
-      return interaction.reply({ content: `${targetUser} 등록 완료`, ephemeral: true });
+      const rolesToAssign = DEPT_ASSIGN_ROLES[dept] || [];
+
+      try {
+        await replaceMemberRoles(targetMember, rolesToAssign, guild);
+        saveData(store);
+
+        return interaction.reply({
+          content: `✅ ${targetUser} 님을 ${dept} 편제에 등록했고, 역할을 새로 적용했습니다.`,
+          ephemeral: true,
+        });
+      } catch (err) {
+        console.error("편제추가 역할 변경 오류:", err);
+
+        return interaction.reply({
+          content:
+            "❌ 편제 등록 중 역할 변경에 실패했습니다. 봇 역할 위치와 Manage Roles 권한을 확인해주세요.",
+          ephemeral: true,
+        });
+      }
     }
 
-    // -------------------------
+    // =========================
     // /사령본부추가
-    // -------------------------
+    // =========================
     if (interaction.commandName === "사령본부추가") {
       const position = interaction.options.getString("직책", true);
       const targetUser = interaction.options.getUser("대상", true);
       const nickname = interaction.options.getString("닉네임", true);
 
-      if (userLevel < 3 && userLevel !== 999) {
+      if (userLevel < 3) {
         return interaction.reply({
           content: "❌ 훈련부장 이상부터 사령본부 수정이 가능합니다.",
           ephemeral: true,
         });
       }
 
-      store.편제["사령본부"] = (store.편제["사령본부"] || []).filter(
+      store.편제["사령본부"] = store.편제["사령본부"].filter(
         (m) => m.position !== position && String(m.id) !== String(targetUser.id)
       );
 
-      store.편제["사령본부"].push({ position, id: targetUser.id, nickname });
+      store.편제["사령본부"].push({
+        position,
+        id: targetUser.id,
+        nickname,
+      });
+
       saveData(store);
 
-      return interaction.reply({ content: `${targetUser} → ${position} 등록 완료`, ephemeral: true });
+      return interaction.reply({
+        content: `${targetUser} → ${position} 등록 완료`,
+        ephemeral: true,
+      });
     }
 
-    // -------------------------
+    // =========================
     // /편제삭제
-    // -------------------------
+    // =========================
     if (interaction.commandName === "편제삭제") {
       const targetUser = interaction.options.getUser("대상", true);
 
-      if (userLevel < 2 && userLevel !== 999) {
-        return interaction.reply({ content: "❌ 사령본부 이상만 사용 가능합니다.", ephemeral: true });
+      if (userLevel < 2) {
+        return interaction.reply({
+          content: "❌ 사령본부 이상만 사용 가능합니다.",
+          ephemeral: true,
+        });
       }
 
-      let removed = false;
-
-      for (const dept of Object.keys(LIMITS)) {
-        const before = (store.편제[dept] || []).length;
-        store.편제[dept] = (store.편제[dept] || []).filter((m) => String(m.id) !== String(targetUser.id));
-        if ((store.편제[dept] || []).length !== before) removed = true;
-      }
-
-      const beforeHQ = (store.편제["사령본부"] || []).length;
-      store.편제["사령본부"] = (store.편제["사령본부"] || []).filter((m) => String(m.id) !== String(targetUser.id));
-      if ((store.편제["사령본부"] || []).length !== beforeHQ) removed = true;
-
+      const removed = removeUserFromOrganization(targetUser.id);
       saveData(store);
 
-      if (removed) return interaction.reply({ content: `${targetUser} 편제에서 삭제 완료`, ephemeral: true });
-      return interaction.reply({ content: "해당 인원은 등록되어 있지 않습니다.", ephemeral: true });
+      if (removed) {
+        return interaction.reply({
+          content: `${targetUser} 편제에서 삭제 완료`,
+          ephemeral: true,
+        });
+      }
+
+      return interaction.reply({
+        content: "해당 인원은 등록되어 있지 않습니다.",
+        ephemeral: true,
+      });
     }
 
-    // -------------------------
-    // ✅ /편제현황 (Level 1 이상만 허용)
-    // -------------------------
+    // =========================
+    // /편제현황
+    // =========================
     if (interaction.commandName === "편제현황") {
-      if (userLevel === 0) {
-        return interaction.reply({ content: "❌ 권한이 없습니다.", ephemeral: true });
+      if (userLevel < 1) {
+        return interaction.reply({
+          content: "❌ 대령 이상만 사용 가능합니다.",
+          ephemeral: true,
+        });
       }
 
       await interaction.deferReply();
@@ -482,37 +630,55 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({ embeds });
     }
 
-    // -------------------------
+    // =========================
     // /찾기
-    // -------------------------
+    // =========================
     if (interaction.commandName === "찾기") {
       const targetUser = interaction.options.getUser("대상", true);
 
-      const inHQ = (store.편제["사령본부"] || []).some((m) => String(m.id) === String(targetUser.id));
+      const inHQ = store.편제["사령본부"].some(
+        (m) => String(m.id) === String(targetUser.id)
+      );
       const inDept = Object.keys(LIMITS).some((dept) =>
-        (store.편제[dept] || []).some((m) => String(m.id) === String(targetUser.id))
+        store.편제[dept].some((m) => String(m.id) === String(targetUser.id))
       );
 
       if (!inHQ && !inDept) {
-        return interaction.reply({ content: "해당 인원은 편제에 없습니다.", ephemeral: true });
+        return interaction.reply({
+          content: "해당 인원은 편제에 없습니다.",
+          ephemeral: true,
+        });
       }
 
       const embeds = buildEmbeds(guild, targetUser.id);
       return interaction.reply({ embeds });
     }
 
-    // -------------------------
+    // =========================
     // /공지
-    // -------------------------
+    // =========================
     if (interaction.commandName === "공지") {
       const channel = interaction.options.getChannel("채널", true);
 
-      if (userLevel < 2 && userLevel !== 999) {
-        return interaction.reply({ content: "❌ 사령본부 이상만 공지가 가능합니다.", ephemeral: true });
+      if (userLevel < 2) {
+        return interaction.reply({
+          content: "❌ 사령본부 이상만 공지가 가능합니다.",
+          ephemeral: true,
+        });
       }
 
-      if (!channel?.isTextBased?.() || channel.isDMBased?.()) {
-        return interaction.reply({ content: "❌ 텍스트 채널만 선택 가능합니다.", ephemeral: true });
+      const allowedChannelTypes = [
+        ChannelType.GuildText,
+        ChannelType.PublicThread,
+        ChannelType.PrivateThread,
+        ChannelType.AnnouncementThread,
+      ];
+
+      if (!channel.isTextBased() || !allowedChannelTypes.includes(channel.type)) {
+        return interaction.reply({
+          content: "❌ 텍스트 채널만 선택 가능합니다.",
+          ephemeral: true,
+        });
       }
 
       const embeds = buildEmbeds(guild, null);
@@ -522,44 +688,112 @@ client.on("interactionCreate", async (interaction) => {
       store.공지.channelId = channel.id;
       saveData(store);
 
-      return interaction.reply({ content: "✅ 편제 공지 생성 완료", ephemeral: true });
+      return interaction.reply({
+        content: "✅ 편제 공지 생성 완료",
+        ephemeral: true,
+      });
     }
 
-    // -------------------------
+    // =========================
     // /공지수정
-    // -------------------------
+    // =========================
     if (interaction.commandName === "공지수정") {
-      if (userLevel < 3 && userLevel !== 999) {
-        return interaction.reply({ content: "❌ 사령본부 이상만 공지수정이 가능합니다.", ephemeral: true });
+      if (userLevel < 3) {
+        return interaction.reply({
+          content: "❌ 사령본부 이상만 공지수정이 가능합니다.",
+          ephemeral: true,
+        });
       }
 
-      const { messageId, channelId } = store.공지 || {};
+      const { messageId, channelId } = store.공지;
+
       if (!messageId || !channelId) {
-        return interaction.reply({ content: "❌ 등록된 공지가 없습니다.", ephemeral: true });
+        return interaction.reply({
+          content: "❌ 등록된 공지가 없습니다.",
+          ephemeral: true,
+        });
       }
 
       const channel = await client.channels.fetch(channelId).catch(() => null);
-      if (!channel?.isTextBased?.()) {
-        return interaction.reply({ content: "❌ 채널을 찾을 수 없습니다.", ephemeral: true });
+      if (!channel || !channel.isTextBased()) {
+        return interaction.reply({
+          content: "❌ 채널을 찾을 수 없습니다.",
+          ephemeral: true,
+        });
       }
 
-      const msg = await channel.messages.fetch(messageId).catch(() => null);
-      if (!msg) {
-        return interaction.reply({ content: "❌ 기존 공지를 찾을 수 없습니다.", ephemeral: true });
+      const message = await channel.messages.fetch(messageId).catch(() => null);
+      if (!message) {
+        return interaction.reply({
+          content: "❌ 기존 공지를 찾을 수 없습니다.",
+          ephemeral: true,
+        });
       }
 
       const embeds = buildEmbeds(guild, null);
-      await msg.edit({ embeds });
+      await message.edit({ embeds });
 
-      return interaction.reply({ content: "✅ 편제 공지 수정 완료", ephemeral: true });
+      return interaction.reply({
+        content: "✅ 편제 공지 수정 완료",
+        ephemeral: true,
+      });
+    }
+
+    // =========================
+    // /해임
+    // =========================
+    if (interaction.commandName === "해임") {
+      const targetUser = interaction.options.getUser("대상", true);
+      const targetMember = await safeFetchMember(guild, targetUser.id);
+
+      if (!targetMember) {
+        return interaction.reply({
+          content: "❌ 유저를 찾을 수 없습니다.",
+          ephemeral: true,
+        });
+      }
+
+      if (userLevel < 2) {
+        return interaction.reply({
+          content: "❌ 사령본부 이상만 사용 가능합니다.",
+          ephemeral: true,
+        });
+      }
+
+      try {
+        const removedFromOrg = removeUserFromOrganization(targetMember.id);
+
+        await replaceMemberRoles(targetMember, DISMISS_ROLES, guild);
+        saveData(store);
+
+        return interaction.reply({
+          content: removedFromOrg
+            ? `⚠️ ${targetMember} 해임 처리 완료 (편제 자동 삭제 포함)`
+            : `⚠️ ${targetMember} 해임 처리 완료`,
+          ephemeral: false,
+        });
+      } catch (err) {
+        console.error("해임 처리 오류:", err);
+        return interaction.reply({
+          content: "❌ 역할 수정 중 오류 발생",
+          ephemeral: true,
+        });
+      }
     }
   } catch (err) {
-    console.error("❌ 명령 처리 중 오류:", err);
-    const safe = "❌ 처리 중 오류가 발생했습니다. 콘솔 로그를 확인해 주세요.";
+    console.error("명령 처리 중 오류:", err);
+
     if (interaction.deferred || interaction.replied) {
-      return interaction.followUp({ content: safe, ephemeral: true }).catch(() => {});
+      return interaction.followUp({
+        content: "❌ 처리 중 오류가 발생했습니다. 콘솔을 확인해주세요.",
+        ephemeral: true,
+      }).catch(() => {});
     }
-    return interaction.reply({ content: safe, ephemeral: true }).catch(() => {});
+
+    return interaction.reply({
+      content: "❌ 처리 중 오류가 발생했습니다. 콘솔을 확인해주세요.",
+      ephemeral: true,
+    }).catch(() => {});
   }
 });
 
@@ -570,8 +804,8 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await registerCommands();
     await client.login(TOKEN);
-  } catch (e) {
-    console.error("❌ 시작 실패:", e);
+  } catch (err) {
+    console.error("❌ 시작 실패:", err);
     process.exit(1);
   }
 })();
