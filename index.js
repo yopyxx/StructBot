@@ -19,7 +19,7 @@
  * - /해임 시 역할 전체 교체 + 편제 자동 삭제
  * - /편제현황 Level 1 이상만 가능
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
- *   -> 글로벌 명령어 비우고 길드 명령어만 등록
+ * - LEVEL_ROLES 역할 ID를 문자열로 수정 (권한 판정 오류 해결)
  *
  * 필수 환경변수
  * - TOKEN
@@ -62,13 +62,14 @@ const SUPER_ADMIN_IDS = [
 
 // =========================
 // 권한 레벨 설정
+// 반드시 문자열로 유지
 // =========================
 const LEVEL_ROLES = {
-  1: [1440692062465953884], // 대령
-  2: [1432003250810388610], // 사령본부
+  1: ["1440692062465953884"], // 대령
+  2: ["1432003250810388610"], // 사령본부
   3: [
-    1432002835264045147,
-    1458110231287435417,
+    "1432002835264045147",
+    "1458110231287435417",
   ], // 사령관
 };
 
@@ -87,7 +88,7 @@ function getUserLevel(member) {
     .sort((a, b) => b - a);
 
   for (const level of levels) {
-    const targets = LEVEL_ROLES[level].map(String);
+    const targets = LEVEL_ROLES[level];
     if (targets.some((id) => roleIds.has(id))) {
       return level;
     }
@@ -512,9 +513,7 @@ client.on("interactionCreate", async (interaction) => {
   const userLevel = getUserLevel(executorMember);
 
   try {
-    // =========================
     // /편제추가
-    // =========================
     if (interaction.commandName === "편제추가") {
       const dept = interaction.options.getString("부서", true);
       const targetUser = interaction.options.getUser("대상", true);
@@ -584,9 +583,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // =========================
     // /사령본부추가
-    // =========================
     if (interaction.commandName === "사령본부추가") {
       const position = interaction.options.getString("직책", true);
       const targetUser = interaction.options.getUser("대상", true);
@@ -618,9 +615,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // =========================
     // /편제삭제
-    // =========================
     if (interaction.commandName === "편제삭제") {
       const targetUser = interaction.options.getUser("대상", true);
 
@@ -648,9 +643,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // =========================
     // /편제현황
-    // =========================
     if (interaction.commandName === "편제현황") {
       if (userLevel < 1) {
         return interaction.reply({
@@ -664,9 +657,7 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({ embeds });
     }
 
-    // =========================
     // /찾기
-    // =========================
     if (interaction.commandName === "찾기") {
       const targetUser = interaction.options.getUser("대상", true);
 
@@ -688,9 +679,7 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({ embeds });
     }
 
-    // =========================
     // /공지
-    // =========================
     if (interaction.commandName === "공지") {
       const channel = interaction.options.getChannel("채널", true);
 
@@ -728,9 +717,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // =========================
     // /공지수정
-    // =========================
     if (interaction.commandName === "공지수정") {
       if (userLevel < 3) {
         return interaction.reply({
@@ -773,9 +760,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // =========================
     // /해임
-    // =========================
     if (interaction.commandName === "해임") {
       const targetUser = interaction.options.getUser("대상", true);
       const targetMember = await safeFetchMember(guild, targetUser.id);
