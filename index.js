@@ -21,7 +21,9 @@
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
  * - LEVEL_ROLES 역할 ID를 문자열로 유지
  * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
- * - 편제현황 임베드 3개 구조로 변경
+ * - 편제현황 임베드 3개 구조
+ * - 재정교육단 표기: :brigadier: | 재정교육단 (준장 0/13)
+ * - 소령 표기: :Major: | 소령 (0/80)
  *
  * 필수 환경변수
  * - TOKEN
@@ -377,7 +379,7 @@ function buildEmbeds(guild, highlightUserId = null) {
   const embed1Desc = [
     ...hqLines,
     "",
-    `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
+    `${ORG_EMOJIS.brigadier} | 재정교육단 (준장 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
     ...(financeMembers.length > 0 ? financeMembers : []),
   ].join("\n");
 
@@ -448,7 +450,9 @@ function buildEmbeds(guild, highlightUserId = null) {
 
   const embed3 = new EmbedBuilder()
     .setColor(0xf1c40f)
-    .setTitle(`${ORG_EMOJIS.major} 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`);
+    .setTitle(
+      `${ORG_EMOJIS.major} | 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`
+    );
 
   if (majorMembers.length > 0) {
     embed3.setDescription(majorMembers.join("\n"));
@@ -565,11 +569,9 @@ async function registerCommands() {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  // 글로벌 명령어 비우기
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
   console.log("✅ 글로벌 슬래시 명령어 정리 완료");
 
-  // 길드 명령어만 등록
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
     body: commands,
   });
