@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Discord.js v14 - 편제(조직표) 관리 봇 최종 완성본
+ * Discord.js v14 - 편제(조직표) 관리 봇 완성본
  *
  * 기능
  * - /편제추가
@@ -14,12 +14,19 @@
  *
  * 반영 사항
  * - 권한 레벨 시스템
- * - 특정 디스코드 ID(942558158436589640) 모든 명령어 사용 가능
+ * - SUPER ADMIN 2명 전체 명령어 사용 가능
+ *   - 942558158436589640
+ *   - 1369378060557877480
  * - /편제추가 시 부서별 역할 전체 교체
  * - /해임 시 역할 전체 교체 + 편제 자동 삭제
  * - /편제현황 Level 1 이상만 가능
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
- * - LEVEL_ROLES 역할 ID를 문자열로 수정 (권한 판정 오류 해결)
+ * - LEVEL_ROLES 역할 ID 문자열 처리
+ * - 편제현황 임베드 3개 구조
+ *   1) 사령본부 / 준장 (0/13)
+ *   2) 대령 (0/28), 중령 (0/50)
+ *   3) 소령 (0/80)
+ * - /편제현황 실행 시 이전 편제현황 출력 자동 삭제
  *
  * 필수 환경변수
  * - TOKEN
@@ -58,6 +65,7 @@ const DATA_FILE = path.join(__dirname, "organization.json");
 // =========================
 const SUPER_ADMIN_IDS = [
   "942558158436589640",
+  "1369378060557877480",
 ];
 
 // =========================
@@ -70,7 +78,7 @@ const LEVEL_ROLES = {
   3: [
     "1432002835264045147",
     "1458110231287435417",
-  ], // 사령관
+  ], // 사령관 / 최상위
 };
 
 function getUserLevel(member) {
@@ -155,40 +163,14 @@ const HQ_POSITIONS = [
   "주임원사",
 ];
 
-const HQ_EMOJIS = {
-  "교육사령관": "<:general:1478002425830047754>",
-  "교육부사령관": "<:majorgeneral:1478002513692065939>",
-  "교육훈련부장": "<:majorgeneral:1478002513692065939>",
-  "종합행정학교장": "<:majorgeneral:1478002513692065939>",
-  "참모장": "<:brigadier:1478002619577405500>",
-  "인사행정단장": "<:brigadier:1478002619577405500>",
-  "기획관리단장": "<:brigadier:1478002619577405500>",
-  "법무관리단장": "<:brigadier:1478002619577405500>",
-  "주임원사": "<:sergeantmajor:1478002719645106248>",
-};
-
-const DEPT_EMOJIS = {
-  "재정교육단": "<:Colonel:1478005729146179645>",
-  "인사교육단_중령": "<:Lieutenant_Colonel:1478005839427141744>",
-  "인사교육단_소령": "<:Major:1478005902702284971>",
-};
-
-const DEPT_DISPLAY_NAME = {
-  "재정교육단": "재정교육단",
-  "인사교육단_중령": "인사교육단",
-  "인사교육단_소령": "인사교육단",
-};
-
-const DEPT_RANK = {
-  "재정교육단": "대령",
-  "인사교육단_중령": "중령",
-  "인사교육단_소령": "소령",
-};
-
+// =========================
+// 표시 / 제한 설정
+// =========================
 const LIMITS = {
-  "재정교육단": 13,
-  "인사교육단_중령": 28,
-  "인사교육단_소령": 50,
+  "사령본부": 13,
+  "재정교육단": 28,       // 대령
+  "인사교육단_중령": 50,  // 중령
+  "인사교육단_소령": 80,  // 소령
 };
 
 // =========================
@@ -203,6 +185,10 @@ function defaultData() {
       "인사교육단_소령": [],
     },
     공지: {
+      messageId: null,
+      channelId: null,
+    },
+    최근편제현황: {
       messageId: null,
       channelId: null,
     },
@@ -221,6 +207,9 @@ function loadData() {
 
     if (!parsed.편제 || typeof parsed.편제 !== "object") parsed.편제 = base.편제;
     if (!parsed.공지 || typeof parsed.공지 !== "object") parsed.공지 = base.공지;
+    if (!parsed.최근편제현황 || typeof parsed.최근편제현황 !== "object") {
+      parsed.최근편제현황 = base.최근편제현황;
+    }
 
     for (const key of Object.keys(base.편제)) {
       if (!Array.isArray(parsed.편제[key])) {
@@ -230,6 +219,9 @@ function loadData() {
 
     if (!("messageId" in parsed.공지)) parsed.공지.messageId = null;
     if (!("channelId" in parsed.공지)) parsed.공지.channelId = null;
+
+    if (!("messageId" in parsed.최근편제현황)) parsed.최근편제현황.messageId = null;
+    if (!("channelId" in parsed.최근편제현황)) parsed.최근편제현황.channelId = null;
 
     return parsed;
   } catch (err) {
@@ -257,12 +249,6 @@ function removeUserFromOrganization(targetId) {
     if (store.편제[dept].length !== before) removed = true;
   }
 
-  const beforeHQ = store.편제["사령본부"].length;
-  store.편제["사령본부"] = store.편제["사령본부"].filter(
-    (m) => String(m.id) !== strId
-  );
-  if (store.편제["사령본부"].length !== beforeHQ) removed = true;
-
   return removed;
 }
 
@@ -283,74 +269,112 @@ async function safeFetchMember(guild, userId) {
 }
 
 function buildEmbeds(guild, highlightUserId = null) {
-  const hqEmbed = new EmbedBuilder()
-    .setTitle("📋 사령본부 편제 현황")
+  // =========================
+  // 임베드 1 : 사령본부
+  // =========================
+  const embed1 = new EmbedBuilder()
+    .setTitle("사령본부")
     .setColor(0x1f3a93);
 
-  const hqLines = [];
-  for (const pos of HQ_POSITIONS) {
-    const emoji = HQ_EMOJIS[pos] || "";
-    const member = store.편제["사령본부"].find((m) => m.position === pos);
+  const hqMembers = [];
 
-    if (member) {
-      const memObj = guild.members.cache.get(String(member.id));
-      if (memObj) {
-        const isTarget =
-          highlightUserId && String(memObj.id) === String(highlightUserId);
-        hqLines.push(
-          isTarget
-            ? `${emoji} | ${pos} : **${memObj} / ${member.nickname} ⭐**`
-            : `${emoji} | ${pos} : ${memObj} / ${member.nickname}`
-        );
-      } else {
-        hqLines.push(`${emoji} | ${pos} : 공석`);
-      }
-    } else {
-      hqLines.push(`${emoji} | ${pos} : 공석`);
-    }
+  for (const m of store.편제["사령본부"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    hqMembers.push(
+      isTarget
+        ? `**${m.position} | ${memObj} / ${m.nickname} ⭐**`
+        : `${m.position} | ${memObj} / ${m.nickname}`
+    );
   }
 
-  hqEmbed.addFields({
-    name: "사령본부",
-    value: hqLines.join("\n") || "없음",
+  embed1.addFields({
+    name: `준장 (${hqMembers.length}/${LIMITS["사령본부"]})`,
+    value: hqMembers.length > 0 ? hqMembers.join("\n") : "없음",
     inline: false,
   });
 
-  const otherEmbed = new EmbedBuilder()
-    .setTitle("📋 재정·인사교육단 편제 현황")
+  // =========================
+  // 임베드 2 : 대령 / 중령
+  // =========================
+  const embed2 = new EmbedBuilder()
     .setColor(0x2ecc71);
 
-  const deptOrder = ["재정교육단", "인사교육단_중령", "인사교육단_소령"];
+  const colonelMembers = [];
+  for (const m of store.편제["재정교육단"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
 
-  for (const dept of deptOrder) {
-    const emoji = DEPT_EMOJIS[dept] || "";
-    const membersList = [];
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
 
-    for (const m of store.편제[dept]) {
-      const memObj = guild.members.cache.get(String(m.id));
-      if (!memObj) continue;
-
-      const isTarget =
-        highlightUserId && String(memObj.id) === String(highlightUserId);
-
-      membersList.push(
-        isTarget
-          ? `**${memObj} / ${m.nickname} ⭐**`
-          : `${memObj} / ${m.nickname}`
-      );
-    }
-
-    const fieldName = `${emoji} | ${DEPT_DISPLAY_NAME[dept]} (${DEPT_RANK[dept]} : ${membersList.length}/${LIMITS[dept]})`;
-    const fieldValue = membersList.length > 0 ? membersList.join("\n") : "없음";
-
-    otherEmbed.addFields({
-      name: fieldName,
-      value: fieldValue,
-      inline: false,
-    });
+    colonelMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
   }
 
-  return [hqEmbed, otherEmbed];
+  const ltColonelMembers = [];
+  for (const m of store.편제["인사교육단_중령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    ltColonelMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
+  }
+
+  embed2.addFields(
+    {
+      name: `대령 (${colonelMembers.length}/${LIMITS["재정교육단"]})`,
+      value: colonelMembers.length > 0 ? colonelMembers.join("\n") : "없음",
+      inline: false,
+    },
+    {
+      name: `중령 (${ltColonelMembers.length}/${LIMITS["인사교육단_중령"]})`,
+      value: ltColonelMembers.length > 0 ? ltColonelMembers.join("\n") : "없음",
+      inline: false,
+    }
+  );
+
+  // =========================
+  // 임베드 3 : 소령
+  // =========================
+  const embed3 = new EmbedBuilder()
+    .setColor(0xf1c40f);
+
+  const majorMembers = [];
+  for (const m of store.편제["인사교육단_소령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    majorMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
+  }
+
+  embed3.addFields({
+    name: `소령 (${majorMembers.length}/${LIMITS["인사교육단_소령"]})`,
+    value: majorMembers.length > 0 ? majorMembers.join("\n") : "없음",
+    inline: false,
+  });
+
+  return [embed1, embed2, embed3];
 }
 
 async function refreshNoticeIfExists(guild) {
@@ -368,6 +392,23 @@ async function refreshNoticeIfExists(guild) {
     await message.edit({ embeds }).catch(() => null);
   } catch (err) {
     console.error("공지 자동 갱신 실패:", err);
+  }
+}
+
+async function deletePreviousStatusMessage() {
+  try {
+    const { messageId, channelId } = store.최근편제현황 || {};
+    if (!messageId || !channelId) return;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const oldMessage = await channel.messages.fetch(messageId).catch(() => null);
+    if (!oldMessage) return;
+
+    await oldMessage.delete().catch(() => null);
+  } catch (err) {
+    console.error("이전 편제현황 메시지 삭제 실패:", err);
   }
 }
 
@@ -460,11 +501,9 @@ async function registerCommands() {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  // 글로벌 명령어 비우기
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
   console.log("✅ 글로벌 슬래시 명령어 정리 완료");
 
-  // 길드 명령어만 등록
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
     body: commands,
   });
@@ -560,7 +599,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      for (const d of Object.keys(LIMITS)) {
+      for (const d of ["재정교육단", "인사교육단_중령", "인사교육단_소령"]) {
         store.편제[d] = store.편제[d].filter(
           (m) => String(m.id) !== String(targetUser.id)
         );
@@ -591,7 +630,7 @@ client.on("interactionCreate", async (interaction) => {
 
       if (userLevel < 3) {
         return interaction.reply({
-          content: "❌ 훈련부장 이상부터 사령본부 수정이 가능합니다.",
+          content: "❌ 최상위 권한만 사령본부 수정이 가능합니다.",
           ephemeral: true,
         });
       }
@@ -652,9 +691,19 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      await interaction.deferReply();
+      await deletePreviousStatusMessage();
+
       const embeds = buildEmbeds(guild, null);
-      return interaction.editReply({ embeds });
+      const sentMessage = await interaction.channel.send({ embeds });
+
+      store.최근편제현황.messageId = sentMessage.id;
+      store.최근편제현황.channelId = sentMessage.channel.id;
+      saveData(store);
+
+      return interaction.reply({
+        content: "✅ 편제현황을 출력했습니다.",
+        ephemeral: true,
+      });
     }
 
     // /찾기
@@ -664,7 +713,7 @@ client.on("interactionCreate", async (interaction) => {
       const inHQ = store.편제["사령본부"].some(
         (m) => String(m.id) === String(targetUser.id)
       );
-      const inDept = Object.keys(LIMITS).some((dept) =>
+      const inDept = ["재정교육단", "인사교육단_중령", "인사교육단_소령"].some((dept) =>
         store.편제[dept].some((m) => String(m.id) === String(targetUser.id))
       );
 
@@ -721,7 +770,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "공지수정") {
       if (userLevel < 3) {
         return interaction.reply({
-          content: "❌ 사령본부 이상만 공지수정이 가능합니다.",
+          content: "❌ 최상위 권한만 공지수정이 가능합니다.",
           ephemeral: true,
         });
       }
