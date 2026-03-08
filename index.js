@@ -14,16 +14,14 @@
  *
  * 반영 사항
  * - 권한 레벨 시스템
- * - 특정 디스코드 ID 2명 모든 명령어 사용 가능
- *   - 942558158436589640
- *   - 1369378060557877480
+ * - 특정 디스코드 ID(942558158436589640, 1369378060557877480) 모든 명령어 사용 가능
  * - /편제추가 시 부서별 역할 전체 교체
  * - /해임 시 역할 전체 교체 + 편제 자동 삭제
  * - /편제현황 Level 1 이상만 가능
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
  * - LEVEL_ROLES 역할 ID를 문자열로 유지
- * - 편제현황 임베드 3개 구조 적용
- * - /편제현황 실행 시 이전에 봇이 출력했던 편제현황 메시지 자동 삭제
+ * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
+ * - 편제현황 임베드 3개 구조로 변경
  *
  * 필수 환경변수
  * - TOKEN
@@ -75,7 +73,7 @@ const LEVEL_ROLES = {
   3: [
     "1432002835264045147",
     "1458110231287435417",
-  ], // 사령관/최상위
+  ], // 사령관
 };
 
 function getUserLevel(member) {
@@ -114,15 +112,27 @@ const DISMISS_ROLES = [
 
 // =========================
 // 부서별 자동 부여 역할
+// ※ 인사교육단_대령은 별도 역할 ID가 없어서
+// 현재 재정교육단과 동일한 세트로 넣어두었습니다.
+// 실제 서버 구조에 맞는 역할 ID가 있다면 이 부분만 교체하세요.
 // =========================
 const DEPT_ASSIGN_ROLES = {
-  "인사교육단_소령": [
+  "재정교육단": [
     "1432007526337089546",
     "1432006421523988664",
     "1432006106800197665",
     "1434909470106058842",
     "1443933530135461908",
-    "1432005794135802007",
+    "1440692062465953884",
+  ],
+
+  "인사교육단_대령": [
+    "1432007526337089546",
+    "1432006421523988664",
+    "1432006106800197665",
+    "1434909470106058842",
+    "1443933530135461908",
+    "1440692062465953884",
   ],
 
   "인사교육단_중령": [
@@ -135,13 +145,13 @@ const DEPT_ASSIGN_ROLES = {
     "1434909470106058842",
   ],
 
-  "재정교육단": [
+  "인사교육단_소령": [
     "1432007526337089546",
     "1432006421523988664",
     "1432006106800197665",
     "1434909470106058842",
     "1443933530135461908",
-    "1440692062465953884",
+    "1432005794135802007",
   ],
 };
 
@@ -160,32 +170,32 @@ const HQ_POSITIONS = [
   "주임원사",
 ];
 
+// =========================
+// 디스코드 커스텀 이모지
+// =========================
 const HQ_EMOJIS = {
-  "교육사령관": ":General:",
-  "교육부사령관": ":LieutenantGeneral:",
-  "교육훈련부장": ":LieutenantGeneral:",
-  "종합행정학교장": ":LieutenantGeneral:",
-  "참모장": ":majorgeneral:",
-  "인사행정단장": ":majorgeneral:",
-  "기획관리단장": ":majorgeneral:",
-  "법무관리단장": ":majorgeneral:",
-  "주임원사": ":sergeantmajor:",
+  "교육사령관": "<:General:1478002425830047754>",
+  "교육부사령관": "<:LieutenantGeneral:1478002513692065939>",
+  "교육훈련부장": "<:LieutenantGeneral:1478002513692065939>",
+  "종합행정학교장": "<:LieutenantGeneral:1478002513692065939>",
+  "참모장": "<:majorgeneral:1478002619577405500>",
+  "인사행정단장": "<:majorgeneral:1478002619577405500>",
+  "기획관리단장": "<:majorgeneral:1478002619577405500>",
+  "법무관리단장": "<:majorgeneral:1478002619577405500>",
+  "주임원사": "<:sergeantmajor:1478002719645106248>",
 };
 
-const DEPT_EMOJIS = {
-  "재정교육단": ":brigadier:",
-  "인사교육단_대령": ":Colonel:",
-  "인사교육단_중령": ":Lieutenant_Colonel:",
-  "인사교육단_소령": ":Major:",
+const ORG_EMOJIS = {
+  brigadier: "<:brigadier:1478002619577405500>",
+  colonel: "<:Colonel:1478005729146179645>",
+  ltcolonel: "<:Lieutenant_Colonel:1478005839427141744>",
+  major: "<:Major:1478005902702284971>",
 };
 
+// =========================
+// 정원
+// =========================
 const LIMITS = {
-  "재정교육단": 13,
-  "인사교육단_중령": 50,
-  "인사교육단_소령": 80,
-};
-
-const DISPLAY_LIMITS = {
   "재정교육단": 13,
   "인사교육단_대령": 28,
   "인사교육단_중령": 50,
@@ -200,6 +210,7 @@ function defaultData() {
     편제: {
       "사령본부": [],
       "재정교육단": [],
+      "인사교육단_대령": [],
       "인사교육단_중령": [],
       "인사교육단_소령": [],
     },
@@ -207,7 +218,7 @@ function defaultData() {
       messageId: null,
       channelId: null,
     },
-    조회메시지: {
+    편제현황메시지: {
       messageId: null,
       channelId: null,
     },
@@ -224,16 +235,10 @@ function loadData() {
     const parsed = JSON.parse(raw);
     const base = defaultData();
 
-    if (!parsed.편제 || typeof parsed.편제 !== "object") {
-      parsed.편제 = base.편제;
-    }
-
-    if (!parsed.공지 || typeof parsed.공지 !== "object") {
-      parsed.공지 = base.공지;
-    }
-
-    if (!parsed.조회메시지 || typeof parsed.조회메시지 !== "object") {
-      parsed.조회메시지 = base.조회메시지;
+    if (!parsed.편제 || typeof parsed.편제 !== "object") parsed.편제 = base.편제;
+    if (!parsed.공지 || typeof parsed.공지 !== "object") parsed.공지 = base.공지;
+    if (!parsed.편제현황메시지 || typeof parsed.편제현황메시지 !== "object") {
+      parsed.편제현황메시지 = base.편제현황메시지;
     }
 
     for (const key of Object.keys(base.편제)) {
@@ -245,8 +250,8 @@ function loadData() {
     if (!("messageId" in parsed.공지)) parsed.공지.messageId = null;
     if (!("channelId" in parsed.공지)) parsed.공지.channelId = null;
 
-    if (!("messageId" in parsed.조회메시지)) parsed.조회메시지.messageId = null;
-    if (!("channelId" in parsed.조회메시지)) parsed.조회메시지.channelId = null;
+    if (!("messageId" in parsed.편제현황메시지)) parsed.편제현황메시지.messageId = null;
+    if (!("channelId" in parsed.편제현황메시지)) parsed.편제현황메시지.channelId = null;
 
     return parsed;
   } catch (err) {
@@ -290,7 +295,7 @@ async function replaceMemberRoles(member, roleIds, guild) {
     await member.roles.remove(removableRoles);
   }
 
-  if (Array.isArray(roleIds) && roleIds.length > 0) {
+  if (roleIds && roleIds.length > 0) {
     await member.roles.add(roleIds);
   }
 }
@@ -299,26 +304,38 @@ async function safeFetchMember(guild, userId) {
   return await guild.members.fetch(userId).catch(() => null);
 }
 
-function formatMemberLine(memObj, nickname, highlightUserId = null) {
-  const isTarget =
-    highlightUserId && String(memObj.id) === String(highlightUserId);
+async function deletePreviousOrgStatusMessage() {
+  try {
+    const { messageId, channelId } = store.편제현황메시지 || {};
+    if (!messageId || !channelId) return;
 
-  return isTarget
-    ? `**${memObj} / ${nickname} ⭐**`
-    : `${memObj} / ${nickname}`;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) return;
+
+    await message.delete().catch(() => null);
+  } catch (err) {
+    console.error("이전 편제현황 메시지 삭제 실패:", err);
+  } finally {
+    store.편제현황메시지 = {
+      messageId: null,
+      channelId: null,
+    };
+    saveData(store);
+  }
 }
 
 function buildEmbeds(guild, highlightUserId = null) {
   // =========================
-  // 임베드 1
-  // 사령본부 + 재정교육단
+  // 임베드 1 - 사령본부 + 재정교육단
   // =========================
   const embed1 = new EmbedBuilder()
-    .setTitle("사령본부")
-    .setColor(0x1f3a93);
+    .setColor(0x1f3a93)
+    .setTitle("사령본부");
 
   const hqLines = [];
-
   for (const pos of HQ_POSITIONS) {
     const emoji = HQ_EMOJIS[pos] || "";
     const member = store.편제["사령본부"].find((m) => m.position === pos);
@@ -326,14 +343,19 @@ function buildEmbeds(guild, highlightUserId = null) {
     if (member) {
       const memObj = guild.members.cache.get(String(member.id));
       if (memObj) {
+        const isTarget =
+          highlightUserId && String(memObj.id) === String(highlightUserId);
+
         hqLines.push(
-          `${emoji} | ${pos} : ${formatMemberLine(memObj, member.nickname, highlightUserId)}`
+          isTarget
+            ? `${emoji} | ${pos} : **${memObj} / ${member.nickname} ⭐**`
+            : `${emoji} | ${pos} : ${memObj} / ${member.nickname}`
         );
       } else {
-        hqLines.push(`${emoji} | ${pos} : `);
+        hqLines.push(`${emoji} | ${pos} :`);
       }
     } else {
-      hqLines.push(`${emoji} | ${pos} : `);
+      hqLines.push(`${emoji} | ${pos} :`);
     }
   }
 
@@ -341,62 +363,96 @@ function buildEmbeds(guild, highlightUserId = null) {
   for (const m of store.편제["재정교육단"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-    financeMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    financeMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
   }
 
-  embed1.setDescription(
-    [
-      ...hqLines,
-      "",
-      `${DEPT_EMOJIS["재정교육단"]} | (재정교육단 ${financeMembers.length}/${DISPLAY_LIMITS["재정교육단"]})`,
-      financeMembers.length ? financeMembers.join("\n") : "",
-    ]
-      .filter((v, i, arr) => !(v === "" && i === arr.length - 1))
-      .join("\n")
-  );
+  const embed1Desc = [
+    ...hqLines,
+    "",
+    `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
+    ...(financeMembers.length > 0 ? financeMembers : []),
+  ].join("\n");
+
+  embed1.setDescription(embed1Desc);
 
   // =========================
-  // 임베드 2
-  // 인사교육단 (대령 0/28) / 인사교육단 (중령 0/50)
+  // 임베드 2 - 인사교육단(대령/중령)
   // =========================
+  const colonelMembers = [];
+  for (const m of store.편제["인사교육단_대령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    colonelMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
+  }
+
+  const ltcolonelMembers = [];
+  for (const m of store.편제["인사교육단_중령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    ltcolonelMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
+  }
+
   const embed2 = new EmbedBuilder()
     .setColor(0x2ecc71)
     .setDescription(
       [
-        `${DEPT_EMOJIS["인사교육단_대령"]} | 인사교육단 (대령 0/${DISPLAY_LIMITS["인사교육단_대령"]})`,
+        `${ORG_EMOJIS.colonel} | 인사교육단 (대령 ${store.편제["인사교육단_대령"].length}/${LIMITS["인사교육단_대령"]})`,
+        ...(colonelMembers.length > 0 ? colonelMembers : []),
         "",
-        `${DEPT_EMOJIS["인사교육단_중령"]} | 인사교육단 (중령 ${store.편제["인사교육단_중령"].filter((m) => guild.members.cache.get(String(m.id))).length}/${DISPLAY_LIMITS["인사교육단_중령"]})`,
-        ...store.편제["인사교육단_중령"]
-          .map((m) => {
-            const memObj = guild.members.cache.get(String(m.id));
-            if (!memObj) return null;
-            return formatMemberLine(memObj, m.nickname, highlightUserId);
-          })
-          .filter(Boolean),
+        `${ORG_EMOJIS.ltcolonel} | 인사교육단 (중령 ${store.편제["인사교육단_중령"].length}/${LIMITS["인사교육단_중령"]})`,
+        ...(ltcolonelMembers.length > 0 ? ltcolonelMembers : []),
       ].join("\n")
     );
 
   // =========================
-  // 임베드 3
-  // 소령
+  // 임베드 3 - 소령
   // =========================
-  const majorMembers = store.편제["인사교육단_소령"]
-    .map((m) => {
-      const memObj = guild.members.cache.get(String(m.id));
-      if (!memObj) return null;
-      return formatMemberLine(memObj, m.nickname, highlightUserId);
-    })
-    .filter(Boolean);
+  const majorMembers = [];
+  for (const m of store.편제["인사교육단_소령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+
+    const isTarget =
+      highlightUserId && String(memObj.id) === String(highlightUserId);
+
+    majorMembers.push(
+      isTarget
+        ? `**${memObj} / ${m.nickname} ⭐**`
+        : `${memObj} / ${m.nickname}`
+    );
+  }
 
   const embed3 = new EmbedBuilder()
     .setColor(0xf1c40f)
-    .setDescription(
-      [
-        `${DEPT_EMOJIS["인사교육단_소령"]} 소령 (${majorMembers.length}/${DISPLAY_LIMITS["인사교육단_소령"]})`,
-        "",
-        ...(majorMembers.length ? majorMembers : []),
-      ].join("\n")
-    );
+    .setTitle(`${ORG_EMOJIS.major} 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`);
+
+  if (majorMembers.length > 0) {
+    embed3.setDescription(majorMembers.join("\n"));
+  }
 
   return [embed1, embed2, embed3];
 }
@@ -419,29 +475,6 @@ async function refreshNoticeIfExists(guild) {
   }
 }
 
-async function deletePreviousStatusMessage() {
-  try {
-    const { messageId, channelId } = store.조회메시지 || {};
-    if (!messageId || !channelId) return;
-
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) return;
-
-    const message = await channel.messages.fetch(messageId).catch(() => null);
-    if (!message) return;
-
-    await message.delete().catch(() => null);
-  } catch (err) {
-    console.error("이전 편제현황 메시지 삭제 실패:", err);
-  } finally {
-    store.조회메시지 = {
-      messageId: null,
-      channelId: null,
-    };
-    saveData(store);
-  }
-}
-
 // =========================
 // 슬래시 명령어 정의
 // =========================
@@ -456,6 +489,7 @@ const commands = [
         .setRequired(true)
         .addChoices(
           { name: "재정교육단", value: "재정교육단" },
+          { name: "인사교육단 (대령)", value: "인사교육단_대령" },
           { name: "인사교육단 (중령)", value: "인사교육단_중령" },
           { name: "인사교육단 (소령)", value: "인사교육단_소령" }
         )
@@ -531,9 +565,11 @@ async function registerCommands() {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
+  // 글로벌 명령어 비우기
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
   console.log("✅ 글로벌 슬래시 명령어 정리 완료");
 
+  // 길드 명령어만 등록
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
     body: commands,
   });
@@ -641,8 +677,8 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       const rolesToAssign = DEPT_ASSIGN_ROLES[dept] || [];
-      await replaceMemberRoles(targetMember, rolesToAssign, guild);
 
+      await replaceMemberRoles(targetMember, rolesToAssign, guild);
       saveData(store);
       await refreshNoticeIfExists(guild);
 
@@ -721,17 +757,18 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      await deletePreviousStatusMessage();
+      await deletePreviousOrgStatusMessage();
 
       const embeds = buildEmbeds(guild, null);
-      const reply = await interaction.reply({
+
+      const sentMessage = await interaction.reply({
         embeds,
         fetchReply: true,
       });
 
-      store.조회메시지 = {
-        messageId: reply.id,
-        channelId: reply.channelId,
+      store.편제현황메시지 = {
+        messageId: sentMessage.id,
+        channelId: sentMessage.channel.id,
       };
       saveData(store);
 
@@ -802,7 +839,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "공지수정") {
       if (userLevel < 3) {
         return interaction.reply({
-          content: "❌ 최상위 권한만 공지수정이 가능합니다.",
+          content: "❌ Level 3 이상만 공지수정이 가능합니다.",
           ephemeral: true,
         });
       }
