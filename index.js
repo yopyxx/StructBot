@@ -22,8 +22,6 @@
  * - LEVEL_ROLES 역할 ID를 문자열로 유지
  * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
  * - 편제현황 임베드 3개 구조
- * - 재정교육단 표기: :brigadier: | 재정교육단 (준장 0/13)
- * - 소령 표기: :Major: | 소령 (0/80)
  * - /편제추가 부서별 역할 세트 사용자 요청 기준으로 반영
  *
  * 필수 환경변수
@@ -175,21 +173,21 @@ const HQ_POSITIONS = [
 // =========================
 const HQ_EMOJIS = {
   "교육사령관": "<:General:1478002425830047754>",
-  "교육부사령관": "<:LieutenantGeneral:1478002513692065939>",
-  "교육훈련부장": "<:LieutenantGeneral:1478002513692065939>",
-  "종합행정학교장": "<:LieutenantGeneral:1478002513692065939>",
-  "참모장": "<:majorgeneral:1478002619577405500>",
-  "인사행정단장": "<:majorgeneral:1478002619577405500>",
-  "기획관리단장": "<:majorgeneral:1478002619577405500>",
-  "법무관리단장": "<:majorgeneral:1478002619577405500>",
+  "교육부사령관": "<:LieutenantGeneral:1480151141969956944>",
+  "교육훈련부장": "<:LieutenantGeneral:1480151141969956944>",
+  "종합행정학교장": "<:LieutenantGeneral:1480151141969956944>",
+  "참모장": "<:majorgeneral:1478002513692065939>",
+  "인사행정단장": "<:majorgeneral:1478002513692065939>",
+  "기획관리단장": "<:majorgeneral:1478002513692065939>",
+  "법무관리단장": "<:majorgeneral:1478002513692065939>",
   "주임원사": "<:sergeantmajor:1478002719645106248>",
 };
 
 const ORG_EMOJIS = {
   brigadier: "<:brigadier:1478002619577405500>",
-  colonel: "<:Colonel:1478005729146179645>",
+  colonel: "<:Colonel:1259174058713419908>",
   ltcolonel: "<:Lieutenant_Colonel:1478005839427141744>",
-  major: "<:Major:1478005902702284971>",
+  major: "<:Major:1259173691745632287>",
 };
 
 // =========================
@@ -377,7 +375,7 @@ function buildEmbeds(guild, highlightUserId = null) {
   const embed1Desc = [
     ...hqLines,
     "",
-    `${ORG_EMOJIS.brigadier} | 재정교육단 (준장 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
+    `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
     ...(financeMembers.length > 0 ? financeMembers : []),
   ].join("\n");
 
@@ -449,7 +447,7 @@ function buildEmbeds(guild, highlightUserId = null) {
   const embed3 = new EmbedBuilder()
     .setColor(0xf1c40f)
     .setTitle(
-      `${ORG_EMOJIS.major} | 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`
+      `${ORG_EMOJIS.major} 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`
     );
 
   if (majorMembers.length > 0) {
