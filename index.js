@@ -1,38 +1,6 @@
 // @ts-nocheck
 /**
  * Discord.js v14 - 편제(조직표) 관리 봇 최종 완성본
- *
- * 기능
- * - /편제추가
- * - /사령본부추가
- * - /편제삭제
- * - /편제현황
- * - /찾기
- * - /공지
- * - /공지수정
- * - /해임
- *
- * 반영 사항
- * - 권한 레벨 시스템
- * - 특정 디스코드 ID(942558158436589640, 1369378060557877480) 모든 명령어 사용 가능
- * - /편제추가 시 부서별 역할 전체 교체
- * - /해임 시 역할 전체 교체 + 편제 자동 삭제
- * - /편제현황 Level 1 이상만 가능
- * - 슬래시 명령어 2개씩 뜨는 문제 방지
- * - LEVEL_ROLES 역할 ID를 문자열로 유지
- * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
- * - 편제현황 임베드 3개 구조
- * - /편제추가 부서별 역할 세트 사용자 요청 기준으로 반영
- *
- * 필수 환경변수
- * - TOKEN
- * - CLIENT_ID
- * - GUILD_ID
- *
- * 필수 권한
- * - Bot > Privileged Gateway Intents > Server Members Intent ON
- * - Manage Roles 권한
- * - 봇 역할이 부여/제거할 역할보다 위에 있어야 함
  */
 
 const fs = require("fs");
@@ -66,7 +34,6 @@ const SUPER_ADMIN_IDS = [
 
 // =========================
 // 권한 레벨 설정
-// 반드시 문자열로 유지
 // =========================
 const LEVEL_ROLES = {
   1: ["1440692062465953884"], // 대령
@@ -113,7 +80,6 @@ const DISMISS_ROLES = [
 
 // =========================
 // 부서별 자동 부여 역할
-// /편제추가 시 기존 역할 전부 제거 후 아래 역할만 부여
 // =========================
 const DEPT_ASSIGN_ROLES = {
   "재정교육단": [
@@ -326,9 +292,6 @@ async function deletePreviousOrgStatusMessage() {
 }
 
 function buildEmbeds(guild, highlightUserId = null) {
-  // =========================
-  // 임베드 1 - 사령본부 + 재정교육단
-  // =========================
   const embed1 = new EmbedBuilder()
     .setColor(0x1f3a93)
     .setTitle("사령본부");
@@ -372,18 +335,15 @@ function buildEmbeds(guild, highlightUserId = null) {
     );
   }
 
-  const embed1Desc = [
-    ...hqLines,
-    "",
-    `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
-    ...(financeMembers.length > 0 ? financeMembers : []),
-  ].join("\n");
+  embed1.setDescription(
+    [
+      ...hqLines,
+      "",
+      `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
+      ...(financeMembers.length > 0 ? financeMembers : []),
+    ].join("\n")
+  );
 
-  embed1.setDescription(embed1Desc);
-
-  // =========================
-  // 임베드 2 - 인사교육단(대령/중령)
-  // =========================
   const colonelMembers = [];
   for (const m of store.편제["인사교육단_대령"]) {
     const memObj = guild.members.cache.get(String(m.id));
@@ -426,9 +386,6 @@ function buildEmbeds(guild, highlightUserId = null) {
       ].join("\n")
     );
 
-  // =========================
-  // 임베드 3 - 소령
-  // =========================
   const majorMembers = [];
   for (const m of store.편제["인사교육단_소령"]) {
     const memObj = guild.members.cache.get(String(m.id));
@@ -475,9 +432,6 @@ async function refreshNoticeIfExists(guild) {
   }
 }
 
-// =========================
-// 슬래시 명령어 정의
-// =========================
 const commands = [
   new SlashCommandBuilder()
     .setName("편제추가")
@@ -555,9 +509,6 @@ const commands = [
     ),
 ].map((cmd) => cmd.toJSON());
 
-// =========================
-// 슬래시 명령어 등록
-// =========================
 async function registerCommands() {
   if (!TOKEN) throw new Error("TOKEN 환경변수가 없습니다.");
   if (!CLIENT_ID) throw new Error("CLIENT_ID 환경변수가 없습니다.");
@@ -574,9 +525,6 @@ async function registerCommands() {
   console.log("✅ 길드 슬래시 명령어 등록 완료");
 }
 
-// =========================
-// 클라이언트 생성
-// =========================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -598,9 +546,6 @@ client.once("ready", async () => {
   }
 });
 
-// =========================
-// 인터랙션 처리
-// =========================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -616,7 +561,6 @@ client.on("interactionCreate", async (interaction) => {
   const userLevel = getUserLevel(executorMember);
 
   try {
-    // /편제추가
     if (interaction.commandName === "편제추가") {
       const dept = interaction.options.getString("부서", true);
       const targetUser = interaction.options.getUser("대상", true);
@@ -686,7 +630,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /사령본부추가
     if (interaction.commandName === "사령본부추가") {
       const position = interaction.options.getString("직책", true);
       const targetUser = interaction.options.getUser("대상", true);
@@ -718,7 +661,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /편제삭제
     if (interaction.commandName === "편제삭제") {
       const targetUser = interaction.options.getUser("대상", true);
 
@@ -746,7 +688,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /편제현황
     if (interaction.commandName === "편제현황") {
       if (userLevel < 1) {
         return interaction.reply({
@@ -769,11 +710,9 @@ client.on("interactionCreate", async (interaction) => {
         channelId: sentMessage.channel.id,
       };
       saveData(store);
-
       return;
     }
 
-    // /찾기
     if (interaction.commandName === "찾기") {
       const targetUser = interaction.options.getUser("대상", true);
 
@@ -795,7 +734,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({ embeds });
     }
 
-    // /공지
     if (interaction.commandName === "공지") {
       const channel = interaction.options.getChannel("채널", true);
 
@@ -833,7 +771,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /공지수정
     if (interaction.commandName === "공지수정") {
       if (userLevel < 3) {
         return interaction.reply({
@@ -876,7 +813,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /해임
     if (interaction.commandName === "해임") {
       const targetUser = interaction.options.getUser("대상", true);
       const targetMember = await safeFetchMember(guild, targetUser.id);
@@ -927,9 +863,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// =========================
-// 실행
-// =========================
 (async () => {
   try {
     await registerCommands();
