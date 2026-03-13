@@ -21,8 +21,8 @@
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
  * - LEVEL_ROLES 역할 ID를 문자열로 유지
  * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
- * - 편제현황 임베드 3개 구조
- * - /편제추가 부서별 역할 세트 사용자 요청 기준으로 반영
+ * - 편제현황 임베드 2개 구조
+ * - /편제추가 부서 선택: 대령 / 중령 / 소령
  *
  * 필수 환경변수
  * - TOKEN
@@ -74,7 +74,7 @@ const LEVEL_ROLES = {
   3: [
     "1432002835264045147",
     "1458110231287435417",
-  ], // 사령관
+  ], // 사령관 / 최고권한
 };
 
 function getUserLevel(member) {
@@ -116,37 +116,29 @@ const DISMISS_ROLES = [
 // /편제추가 시 기존 역할 전부 제거 후 아래 역할만 부여
 // =========================
 const DEPT_ASSIGN_ROLES = {
-  "재정교육단": [
-    "1432007526337089546",
-    "1432006421523988664",
-    "1432006106800197665",
-    "1434909470106058842",
-    "1443933530135461908",
+  "대령": [
     "1440692062465953884",
+    "1443933530135461908",
+    "1434909470106058842",
+    "1432006106800197665",
+    "1432006421523988664",
+    "1432007526337089546",
   ],
 
-  "인사교육단_대령": [
-    "1432007526337089546",
-    "1432006421523988664",
-    "1432006106800197665",
+  "중령": [
     "1432005794135802007",
     "1473698641628631153",
     "1443933530135461908",
     "1434909470106058842",
-  ],
-
-  "인사교육단_중령": [
-    "1432007526337089546",
-    "1432006421523988664",
     "1432006106800197665",
-    "1434909470106058842",
-    "1443933530135461908",
-    "1432005794135802007",
+    "1432006421523988664",
+    "1432007526337089546",
   ],
 
-  "인사교육단_소령": [
-    "1480167487214583911",
-    "1432005822237380659",
+  "소령": [
+    "1432005794135802007",
+    "1443933530135461908",
+    "1434909470106058842",
     "1432006106800197665",
     "1432006421523988664",
     "1432007526337089546",
@@ -194,10 +186,9 @@ const ORG_EMOJIS = {
 // 정원
 // =========================
 const LIMITS = {
-  "재정교육단": 13,
-  "인사교육단_대령": 28,
-  "인사교육단_중령": 50,
-  "인사교육단_소령": 80,
+  "대령": 13,
+  "중령": 28,
+  "소령": 50,
 };
 
 // =========================
@@ -207,10 +198,9 @@ function defaultData() {
   return {
     편제: {
       "사령본부": [],
-      "재정교육단": [],
-      "인사교육단_대령": [],
-      "인사교육단_중령": [],
-      "인사교육단_소령": [],
+      "대령": [],
+      "중령": [],
+      "소령": [],
     },
     공지: {
       messageId: null,
@@ -233,8 +223,14 @@ function loadData() {
     const parsed = JSON.parse(raw);
     const base = defaultData();
 
-    if (!parsed.편제 || typeof parsed.편제 !== "object") parsed.편제 = base.편제;
-    if (!parsed.공지 || typeof parsed.공지 !== "object") parsed.공지 = base.공지;
+    if (!parsed.편제 || typeof parsed.편제 !== "object") {
+      parsed.편제 = base.편제;
+    }
+
+    if (!parsed.공지 || typeof parsed.공지 !== "object") {
+      parsed.공지 = base.공지;
+    }
+
     if (!parsed.편제현황메시지 || typeof parsed.편제현황메시지 !== "object") {
       parsed.편제현황메시지 = base.편제현황메시지;
     }
@@ -287,7 +283,9 @@ function removeUserFromOrganization(targetId) {
 }
 
 async function replaceMemberRoles(member, roleIds, guild) {
-  const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
+  const removableRoles = member.roles.cache.filter(
+    (role) => role.id !== guild.id
+  );
 
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
@@ -325,13 +323,22 @@ async function deletePreviousOrgStatusMessage() {
   }
 }
 
+function formatMemberLine(memObj, nickname, highlightUserId = null) {
+  const isTarget =
+    highlightUserId && String(memObj.id) === String(highlightUserId);
+
+  return isTarget
+    ? `**${memObj} / ${nickname} ⭐**`
+    : `${memObj} / ${nickname}`;
+}
+
 function buildEmbeds(guild, highlightUserId = null) {
   // =========================
-  // 임베드 1 - 사령본부 + 재정교육단
+  // 임베드 1 - 사령본부
   // =========================
   const embed1 = new EmbedBuilder()
     .setColor(0x1f3a93)
-    .setTitle("사령본부");
+    .setTitle("📋 사령본부 편제 현황");
 
   const hqLines = [];
   for (const pos of HQ_POSITIONS) {
@@ -341,120 +348,59 @@ function buildEmbeds(guild, highlightUserId = null) {
     if (member) {
       const memObj = guild.members.cache.get(String(member.id));
       if (memObj) {
-        const isTarget =
-          highlightUserId && String(memObj.id) === String(highlightUserId);
-
-        hqLines.push(
-          isTarget
-            ? `${emoji} | ${pos} : **${memObj} / ${member.nickname} ⭐**`
-            : `${emoji} | ${pos} : ${memObj} / ${member.nickname}`
-        );
+        const line = formatMemberLine(memObj, member.nickname, highlightUserId);
+        hqLines.push(`${emoji} | ${pos} : ${line}`);
       } else {
-        hqLines.push(`${emoji} | ${pos} :`);
+        hqLines.push(`${emoji} | ${pos} : 공석`);
       }
     } else {
-      hqLines.push(`${emoji} | ${pos} :`);
+      hqLines.push(`${emoji} | ${pos} : 공석`);
     }
   }
 
-  const financeMembers = [];
-  for (const m of store.편제["재정교육단"]) {
-    const memObj = guild.members.cache.get(String(m.id));
-    if (!memObj) continue;
-
-    const isTarget =
-      highlightUserId && String(memObj.id) === String(highlightUserId);
-
-    financeMembers.push(
-      isTarget
-        ? `**${memObj} / ${m.nickname} ⭐**`
-        : `${memObj} / ${m.nickname}`
-    );
-  }
-
-  const embed1Desc = [
-    ...hqLines,
-    "",
-    `${ORG_EMOJIS.brigadier} | (재정교육단 ${store.편제["재정교육단"].length}/${LIMITS["재정교육단"]})`,
-    ...(financeMembers.length > 0 ? financeMembers : []),
-  ].join("\n");
-
-  embed1.setDescription(embed1Desc);
+  embed1.setDescription(["사령본부", ...hqLines].join("\n"));
 
   // =========================
-  // 임베드 2 - 인사교육단(대령/중령)
+  // 임베드 2 - 재정·인사교육단
   // =========================
   const colonelMembers = [];
-  for (const m of store.편제["인사교육단_대령"]) {
+  for (const m of store.편제["대령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
-
-    const isTarget =
-      highlightUserId && String(memObj.id) === String(highlightUserId);
-
-    colonelMembers.push(
-      isTarget
-        ? `**${memObj} / ${m.nickname} ⭐**`
-        : `${memObj} / ${m.nickname}`
-    );
+    colonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
   }
 
   const ltcolonelMembers = [];
-  for (const m of store.편제["인사교육단_중령"]) {
+  for (const m of store.편제["중령"]) {
     const memObj = guild.members.cache.get(String(m.id));
     if (!memObj) continue;
+    ltcolonelMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
+  }
 
-    const isTarget =
-      highlightUserId && String(memObj.id) === String(highlightUserId);
-
-    ltcolonelMembers.push(
-      isTarget
-        ? `**${memObj} / ${m.nickname} ⭐**`
-        : `${memObj} / ${m.nickname}`
-    );
+  const majorMembers = [];
+  for (const m of store.편제["소령"]) {
+    const memObj = guild.members.cache.get(String(m.id));
+    if (!memObj) continue;
+    majorMembers.push(formatMemberLine(memObj, m.nickname, highlightUserId));
   }
 
   const embed2 = new EmbedBuilder()
     .setColor(0x2ecc71)
+    .setTitle("📋 재정·인사교육단 편제 현황")
     .setDescription(
       [
-        `${ORG_EMOJIS.colonel} | 인사교육단 (대령 ${store.편제["인사교육단_대령"].length}/${LIMITS["인사교육단_대령"]})`,
-        ...(colonelMembers.length > 0 ? colonelMembers : []),
+        `${ORG_EMOJIS.colonel} | 재정교육단 (대령 : ${store.편제["대령"].length}/${LIMITS["대령"]})`,
+        ...(colonelMembers.length > 0 ? colonelMembers : ["없음"]),
         "",
-        `${ORG_EMOJIS.ltcolonel} | 인사교육단 (중령 ${store.편제["인사교육단_중령"].length}/${LIMITS["인사교육단_중령"]})`,
-        ...(ltcolonelMembers.length > 0 ? ltcolonelMembers : []),
+        `${ORG_EMOJIS.ltcolonel} | 인사교육단 (중령 : ${store.편제["중령"].length}/${LIMITS["중령"]})`,
+        ...(ltcolonelMembers.length > 0 ? ltcolonelMembers : ["없음"]),
+        "",
+        `${ORG_EMOJIS.major} | 인사교육단 (소령 : ${store.편제["소령"].length}/${LIMITS["소령"]})`,
+        ...(majorMembers.length > 0 ? majorMembers : ["없음"]),
       ].join("\n")
     );
 
-  // =========================
-  // 임베드 3 - 소령
-  // =========================
-  const majorMembers = [];
-  for (const m of store.편제["인사교육단_소령"]) {
-    const memObj = guild.members.cache.get(String(m.id));
-    if (!memObj) continue;
-
-    const isTarget =
-      highlightUserId && String(memObj.id) === String(highlightUserId);
-
-    majorMembers.push(
-      isTarget
-        ? `**${memObj} / ${m.nickname} ⭐**`
-        : `${memObj} / ${m.nickname}`
-    );
-  }
-
-  const embed3 = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle(
-      `${ORG_EMOJIS.major} 소령 (${store.편제["인사교육단_소령"].length}/${LIMITS["인사교육단_소령"]})`
-    );
-
-  if (majorMembers.length > 0) {
-    embed3.setDescription(majorMembers.join("\n"));
-  }
-
-  return [embed1, embed2, embed3];
+  return [embed1, embed2];
 }
 
 async function refreshNoticeIfExists(guild) {
@@ -475,23 +421,29 @@ async function refreshNoticeIfExists(guild) {
   }
 }
 
+function formatDeptLabel(dept) {
+  if (dept === "대령") return "대령";
+  if (dept === "중령") return "중령";
+  if (dept === "소령") return "소령";
+  return dept;
+}
+
 // =========================
 // 슬래시 명령어 정의
 // =========================
 const commands = [
   new SlashCommandBuilder()
     .setName("편제추가")
-    .setDescription("재정교육단 또는 인사교육단에 인원을 추가합니다.")
+    .setDescription("대령 / 중령 / 소령 편제에 인원을 추가합니다.")
     .addStringOption((opt) =>
       opt
         .setName("부서")
         .setDescription("추가할 부서")
         .setRequired(true)
         .addChoices(
-          { name: "재정교육단", value: "재정교육단" },
-          { name: "인사교육단 (대령)", value: "인사교육단_대령" },
-          { name: "인사교육단 (중령)", value: "인사교육단_중령" },
-          { name: "인사교육단 (소령)", value: "인사교육단_소령" }
+          { name: "대령", value: "대령" },
+          { name: "중령", value: "중령" },
+          { name: "소령", value: "소령" }
         )
     )
     .addUserOption((opt) =>
@@ -629,9 +581,9 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (userLevel === 1 && dept !== "인사교육단_소령") {
+      if (userLevel === 1 && dept !== "소령") {
         return interaction.reply({
-          content: "❌ 대령 권한은 인사교육단(소령)만 추가 가능합니다.",
+          content: "❌ 대령 권한은 소령 편제만 추가 가능합니다.",
           ephemeral: true,
         });
       }
@@ -663,11 +615,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      for (const d of Object.keys(LIMITS)) {
-        store.편제[d] = store.편제[d].filter(
-          (m) => String(m.id) !== String(targetUser.id)
-        );
-      }
+      removeUserFromOrganization(targetUser.id);
 
       store.편제[dept].push({
         id: targetUser.id,
@@ -681,7 +629,7 @@ client.on("interactionCreate", async (interaction) => {
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
-        content: `✅ ${targetUser} 님을 ${dept} 편제에 등록했고, 역할을 새로 적용했습니다.`,
+        content: `✅ ${targetUser} 님을 ${formatDeptLabel(dept)} 편제에 등록했고, 역할을 새로 적용했습니다.`,
         ephemeral: true,
       });
     }
@@ -694,7 +642,7 @@ client.on("interactionCreate", async (interaction) => {
 
       if (userLevel < 3) {
         return interaction.reply({
-          content: "❌ 훈련부장 이상부터 사령본부 수정이 가능합니다.",
+          content: "❌ Level 3 이상만 사령본부 수정이 가능합니다.",
           ephemeral: true,
         });
       }
@@ -713,7 +661,7 @@ client.on("interactionCreate", async (interaction) => {
       await refreshNoticeIfExists(guild);
 
       return interaction.reply({
-        content: `${targetUser} → ${position} 등록 완료`,
+        content: `✅ ${targetUser} → ${position} 등록 완료`,
         ephemeral: true,
       });
     }
@@ -735,7 +683,7 @@ client.on("interactionCreate", async (interaction) => {
 
       if (removed) {
         return interaction.reply({
-          content: `${targetUser} 편제에서 삭제 완료`,
+          content: `✅ ${targetUser} 편제에서 삭제 완료`,
           ephemeral: true,
         });
       }
