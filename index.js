@@ -20,9 +20,9 @@
  * - /편제현황 Level 1 이상만 가능
  * - 슬래시 명령어 2개씩 뜨는 문제 방지
  * - LEVEL_ROLES 역할 ID를 문자열로 유지
- * - 편제현황을 새로 출력하면 이전 편제현황 출력 삭제
  * - 편제현황 임베드 2개 구조
  * - /편제추가 부서 선택: 대령 / 중령 / 소령
+ * - /편제현황, /찾기 본인만 보이도록(ephemeral) 처리
  *
  * 필수 환경변수
  * - TOKEN
@@ -74,7 +74,7 @@ const LEVEL_ROLES = {
   3: [
     "1432002835264045147",
     "1458110231287435417",
-  ], // 사령관 / 최고권한
+  ], // 최고권한
 };
 
 function getUserLevel(member) {
@@ -116,7 +116,7 @@ const DISMISS_ROLES = [
 // /편제추가 시 기존 역할 전부 제거 후 아래 역할만 부여
 // =========================
 const DEPT_ASSIGN_ROLES = {
-  "대령": [
+  대령: [
     "1440692062465953884",
     "1443933530135461908",
     "1434909470106058842",
@@ -125,7 +125,7 @@ const DEPT_ASSIGN_ROLES = {
     "1432007526337089546",
   ],
 
-  "중령": [
+  중령: [
     "1432005794135802007",
     "1473698641628631153",
     "1443933530135461908",
@@ -135,7 +135,7 @@ const DEPT_ASSIGN_ROLES = {
     "1432007526337089546",
   ],
 
-  "소령": [
+  소령: [
     "1432005794135802007",
     "1443933530135461908",
     "1434909470106058842",
@@ -164,19 +164,18 @@ const HQ_POSITIONS = [
 // 디스코드 커스텀 이모지
 // =========================
 const HQ_EMOJIS = {
-  "교육사령관": "<:General:1478002425830047754>",
-  "교육부사령관": "<:LieutenantGeneral:1480151141969956944>",
-  "교육훈련부장": "<:LieutenantGeneral:1480151141969956944>",
-  "종합행정학교장": "<:LieutenantGeneral:1480151141969956944>",
-  "참모장": "<:majorgeneral:1478002513692065939>",
-  "인사행정단장": "<:majorgeneral:1478002513692065939>",
-  "기획관리단장": "<:majorgeneral:1478002513692065939>",
-  "법무관리단장": "<:majorgeneral:1478002513692065939>",
-  "주임원사": "<:sergeantmajor:1478002719645106248>",
+  교육사령관: "<:General:1478002425830047754>",
+  교육부사령관: "<:LieutenantGeneral:1480151141969956944>",
+  교육훈련부장: "<:LieutenantGeneral:1480151141969956944>",
+  종합행정학교장: "<:LieutenantGeneral:1480151141969956944>",
+  참모장: "<:brigadier:1478002619577405500>",
+  인사행정단장: "<:brigadier:1478002619577405500>",
+  기획관리단장: "<:brigadier:1478002619577405500>",
+  법무관리단장: "<:brigadier:1478002619577405500>",
+  주임원사: "<:sergeantmajor:1478002719645106248>",
 };
 
 const ORG_EMOJIS = {
-  brigadier: "<:brigadier:1478002619577405500>",
   colonel: "<:Colonel:1478005729146179645>",
   ltcolonel: "<:Lieutenant_Colonel:1478005839427141744>",
   major: "<:Major:1478005902702284971>",
@@ -186,9 +185,9 @@ const ORG_EMOJIS = {
 // 정원
 // =========================
 const LIMITS = {
-  "대령": 13,
-  "중령": 28,
-  "소령": 50,
+  대령: 13,
+  중령: 28,
+  소령: 50,
 };
 
 // =========================
@@ -197,16 +196,12 @@ const LIMITS = {
 function defaultData() {
   return {
     편제: {
-      "사령본부": [],
-      "대령": [],
-      "중령": [],
-      "소령": [],
+      사령본부: [],
+      대령: [],
+      중령: [],
+      소령: [],
     },
     공지: {
-      messageId: null,
-      channelId: null,
-    },
-    편제현황메시지: {
       messageId: null,
       channelId: null,
     },
@@ -231,10 +226,6 @@ function loadData() {
       parsed.공지 = base.공지;
     }
 
-    if (!parsed.편제현황메시지 || typeof parsed.편제현황메시지 !== "object") {
-      parsed.편제현황메시지 = base.편제현황메시지;
-    }
-
     for (const key of Object.keys(base.편제)) {
       if (!Array.isArray(parsed.편제[key])) {
         parsed.편제[key] = [];
@@ -243,9 +234,6 @@ function loadData() {
 
     if (!("messageId" in parsed.공지)) parsed.공지.messageId = null;
     if (!("channelId" in parsed.공지)) parsed.공지.channelId = null;
-
-    if (!("messageId" in parsed.편제현황메시지)) parsed.편제현황메시지.messageId = null;
-    if (!("channelId" in parsed.편제현황메시지)) parsed.편제현황메시지.channelId = null;
 
     return parsed;
   } catch (err) {
@@ -283,9 +271,7 @@ function removeUserFromOrganization(targetId) {
 }
 
 async function replaceMemberRoles(member, roleIds, guild) {
-  const removableRoles = member.roles.cache.filter(
-    (role) => role.id !== guild.id
-  );
+  const removableRoles = member.roles.cache.filter((role) => role.id !== guild.id);
 
   if (removableRoles.size > 0) {
     await member.roles.remove(removableRoles);
@@ -298,29 +284,6 @@ async function replaceMemberRoles(member, roleIds, guild) {
 
 async function safeFetchMember(guild, userId) {
   return await guild.members.fetch(userId).catch(() => null);
-}
-
-async function deletePreviousOrgStatusMessage() {
-  try {
-    const { messageId, channelId } = store.편제현황메시지 || {};
-    if (!messageId || !channelId) return;
-
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) return;
-
-    const message = await channel.messages.fetch(messageId).catch(() => null);
-    if (!message) return;
-
-    await message.delete().catch(() => null);
-  } catch (err) {
-    console.error("이전 편제현황 메시지 삭제 실패:", err);
-  } finally {
-    store.편제현황메시지 = {
-      messageId: null,
-      channelId: null,
-    };
-    saveData(store);
-  }
 }
 
 function formatMemberLine(memObj, nickname, highlightUserId = null) {
@@ -703,20 +666,12 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      await deletePreviousOrgStatusMessage();
-
       const embeds = buildEmbeds(guild, null);
 
-      const sentMessage = await interaction.reply({
+      await interaction.reply({
         embeds,
-        fetchReply: true,
+        ephemeral: true,
       });
-
-      store.편제현황메시지 = {
-        messageId: sentMessage.id,
-        channelId: sentMessage.channel.id,
-      };
-      saveData(store);
 
       return;
     }
@@ -740,7 +695,10 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const embeds = buildEmbeds(guild, targetUser.id);
-      return interaction.reply({ embeds });
+      return interaction.reply({
+        embeds,
+        ephemeral: true,
+      });
     }
 
     // /공지
